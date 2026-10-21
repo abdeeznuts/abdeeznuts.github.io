@@ -1,7 +1,8 @@
 // Live prices: the current cheapest flight and hotel for a trip.
 // Prices come from Google Flights and Google Hotels through Uniworld's price
 // service (a Supabase function that keeps the API key off the phone and caches
-// results). Booking still goes through a Uniworld advisor.
+// results). "Book with Uniworld" opens the app's request form with the price
+// the customer saw; an advisor confirms and books.
 const ENDPOINT = 'https://imytqgeldrfmxsxszrqs.supabase.co/functions/v1/uniworld-live-rates';
 const ADVISOR_EMAIL = 'contact@uniworldinc.com';
 
@@ -133,6 +134,35 @@ function hotelMail(data, h) {
   return `mailto:${ADVISOR_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+// ---------- Book with Uniworld: opens the app's request form with the price the customer saw ----------
+const bookables = new Map();
+let bookSeq = 0;
+function bookButton(payload, label, fallbackHref) {
+  if (!ctx?.onBook) return `<a class="live-cta" href="${fallbackHref}">${ic('mail')} ${label}</a>`;
+  const id = 'b' + (++bookSeq);
+  bookables.set(id, payload);
+  if (bookables.size > 60) bookables.delete(bookables.keys().next().value);
+  return `<button type="button" class="live-cta" data-action="live-book" data-book="${id}">${label} ${ic('arrowRight')}</button>`;
+}
+function flightPayload(data) {
+  const f = data.flight, t = data.trip;
+  const via = f.stops === 0 ? 'Nonstop' : `${f.stops} stop${f.stops > 1 ? 's' : ''}`;
+  return {
+    kind: 'flight', from: airportLabel(t.from), to: airportLabel(t.to), start: t.depart, end: t.return || '',
+    travelers: f.travelers || t.adults || 1, cabin: 'Economy', oneWay: !t.return,
+    title: `${airportLabel(t.from)} → ${airportLabel(t.to)}`, details: `${f.airline} · ${via} · Economy`,
+    seen: { amount: f.price, currency: data.currency, source: 'Google Flights', checkedAt: f.fetchedAt, per: (f.travelers || 1) > 1 ? 'trip' : 'person', airline: f.airline, stops: f.stops },
+  };
+}
+function hotelPayload(data, h) {
+  const s = data.hotel;
+  return {
+    kind: 'hotel', hotelName: h.name, city: s.city || '', start: s.checkIn, end: s.checkOut, travelers: s.guests || 2,
+    image: h.image || h.thumb || '', title: h.name, details: `${s.nights} night${s.nights > 1 ? 's' : ''}${s.city ? ' · ' + s.city : ''}`,
+    seen: { amount: h.pricePerNight, total: h.total || null, currency: data.currency, source: 'Google Hotels', checkedAt: s.fetchedAt, per: 'night' },
+  };
+}
+
 // ---------- Cards ----------
 const LEVELS = { low: ['Low price', 'low'], typical: ['Typical price', 'typical'], high: ['Higher than usual', 'high'] };
 
@@ -182,7 +212,7 @@ function flightCard(data) {
     </div>
     ${typical ? `<p class="live-note">${typical}</p>` : ''}
     ${priceTrend(f.insights, cur)}
-    <div class="live-actions"><a class="live-cta" href="${flightMail(data)}">${ic('mail')} Book with Uniworld</a><a class="live-link" href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ${ic('arrowUpRight')}</a></div>
+    <div class="live-actions">${bookButton(flightPayload(data), 'Book with Uniworld', flightMail(data))}<a class="live-link" href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ${ic('arrowUpRight')}</a></div>
     <span class="live-stamp">${f.stale ? 'Last checked' : 'Checked'} ${ago(f.fetchedAt)}${f.compared ? ` · ${f.compared} fares compared` : ''}</span>
   </article>`;
 }
@@ -201,7 +231,7 @@ function hotelCard(data) {
       <div class="live-price"><strong>${money(h.pricePerNight, cur)}</strong><small>per night${h.total ? ` · ${money(h.total, cur)} for ${s.nights} night${s.nights > 1 ? 's' : ''}` : ''}</small></div>
       <p class="live-dates">${dayLabel(s.checkIn)} → ${dayLabel(s.checkOut)} · ${s.guests} guest${s.guests > 1 ? 's' : ''}</p>
       ${alt ? `<a class="live-alt" href="${esc(alt.link || s.link)}" target="_blank" rel="noopener"><span>Best-rated cheap pick</span><b>${esc(alt.name)}</b><small>${alt.rating ? `★ ${alt.rating.toFixed(1)} · ` : ''}${money(alt.pricePerNight, cur)} / night</small></a>` : ''}
-      <div class="live-actions"><a class="live-cta" href="${hotelMail(data, h)}">${ic('mail')} Book with Uniworld</a><a class="live-link" href="${esc(h.link || s.link)}" target="_blank" rel="noopener">Google Hotels ${ic('arrowUpRight')}</a></div>
+      <div class="live-actions">${bookButton(hotelPayload(data, h), 'Book with Uniworld', hotelMail(data, h))}<a class="live-link" href="${esc(h.link || s.link)}" target="_blank" rel="noopener">Google Hotels ${ic('arrowUpRight')}</a></div>
       <span class="live-stamp">${s.stale ? 'Last checked' : 'Checked'} ${ago(s.fetchedAt)}${s.compared ? ` · ${s.compared} stays compared` : ''}</span>
     </div>
   </article>`;
@@ -365,7 +395,7 @@ async function submitLiveSearch(e) {
   }
 }
 
-// ---------- Live fare inside the demo flight search ----------
+// ---------- Live fare inside the flight search ----------
 export async function liveFlightBanner(el, search) {
   if (!el) return;
   const a = parseAirport(search.from), b = parseAirport(search.to);
@@ -385,8 +415,8 @@ export async function liveFlightBanner(el, search) {
       <div class="live-banner-main"><span class="eyebrow live-eyebrow"><i class="live-dot" aria-hidden="true"></i>REAL FARE RIGHT NOW</span>
         <strong>${money(f.price, data.currency)}</strong><small>${f.tripType.toLowerCase()} · ${f.travelers > 1 ? `${f.travelers} travelers` : 'per person'}</small>
         <p>${esc(f.airline)} · ${via}${f.durationMin ? ` · ${duration(f.durationMin)}` : ''} · checked ${ago(f.fetchedAt)}</p></div>
-      <div class="live-actions"><a class="live-cta" href="${flightMail(data)}">${ic('mail')} Book this fare</a><a class="live-link" href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ${ic('arrowUpRight')}</a></div>
-      <small class="live-banner-note">The lowest real fare from Google Flights. The options below are demo fares for trying the booking flow.</small>
+      <div class="live-actions">${bookButton(flightPayload(data), 'Book this fare', flightMail(data))}<a class="live-link" href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ${ic('arrowUpRight')}</a></div>
+      <small class="live-banner-note">The lowest real economy fare on Google Flights right now. An advisor confirms the exact flight and price with you before booking.</small>
     </div>`;
   } catch {
     if (el.isConnected) el.innerHTML = '';
@@ -398,6 +428,10 @@ function onClick(e) {
   if (!b) return;
   const action = b.dataset.action;
   if (action === 'live-search') openLiveSearch(ctx.getDates?.() || {});
+  else if (action === 'live-book') {
+    const payload = bookables.get(b.dataset.book);
+    if (payload && ctx?.onBook) ctx.onBook(payload);
+  }
   else if (action === 'live-route') {
     const section = b.closest('[data-live-rates]');
     const index = Number(b.dataset.index) || 0;

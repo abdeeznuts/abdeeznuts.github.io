@@ -1,0 +1,97 @@
+/* Booking requests and the Uniworld team inbox. */
+
+/* Request form */
+.req-lede{font-size:12px;color:#6f8573;margin-top:10px;line-height:1.6}
+.checkout-fields .req-hint,.checkout-fields .req-optional{display:block;font-weight:400;color:#8c9680;font-size:10px;margin-top:6px}
+.checkout-fields .req-optional{display:inline;margin:0 0 0 4px}
+.checkout-fields>label>.field-input{margin-top:8px}
+.req-reach{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px}
+.req-reach legend{font-size:10px;font-weight:600;margin-bottom:8px;padding:0}
+.req-reach label{display:inline-flex;align-items:center;gap:7px;border:1px solid #dce2d8;background:#fff;border-radius:30px;padding:9px 14px;font-size:11px;cursor:pointer}
+.req-reach label:has(input:checked){border-color:var(--ink);background:#eef3ee}
+.req-reach input{accent-color:var(--ink);margin:0}
+.req-privacy{font-size:10px;color:#6f8573;line-height:1.7}
+.req-privacy summary{cursor:pointer;font-weight:600;color:var(--ink)}
+.req-privacy p{margin-top:6px}
+.req-summary>img{width:100%;object-fit:cover}
+
+/* Status */
+.req-status{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:700;letter-spacing:.3px;padding:6px 10px;border-radius:30px;background:#fff1dc;color:#8a5a1f}
+.req-status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.req-status.in_progress{background:#e3eef3;color:#2b5e72}
+.req-status.confirmed{background:#e1efe3;color:#2f6b45}
+.req-status.cancelled{background:#efefec;color:#7a7f78}
+.req-panel .req-status{margin:-8px auto 6px}
+.req-message{text-align:left;background:#fff;border:1px solid #dfe6dc;border-left:4px solid #2f6b45;border-radius:12px;padding:16px 18px;margin:18px 0 4px}
+.req-message .eyebrow{font-size:8px;margin-bottom:8px;color:#557462}
+.req-message p{white-space:pre-line;font-size:13px!important;color:var(--ink)!important;margin:0!important;line-height:1.6!important}
+.req-panel .booking-actions a{width:100%;font-size:12px}
+.req-panel .booking-actions .icon{width:16px;height:16px}
+.req-card .req-status{margin:6px 0 0}
+.req-card-msg{display:flex;align-items:center;gap:6px;font-size:11px!important;color:#2f6b45!important;font-weight:600;margin-top:8px}
+.req-card-msg .icon{width:14px;height:14px}
+
+/* Team inbox */
+.staff-page{padding:40px 0 70px;min-height:60vh}
+.staff-loading{padding:60px 0;text-align:center;color:#6f8573}
+.staff-login{max-width:460px;margin:30px auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:32px}
+.staff-login h1,.staff-head h1{font-size:30px;letter-spacing:-.8px;margin:4px 0 10px}
+.staff-login>p{font-size:12px;color:#6f8573;line-height:1.7}
+.staff-login .detail-notice{font-size:10px}
+.staff-login form{margin-top:20px;display:grid;gap:12px}
+.staff-login label{font-size:11px;font-weight:600;display:grid;gap:8px}
+.staff-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:18px}
+.staff-head p{font-size:12px;color:#6f8573}
+.staff-tools{display:flex;gap:10px;align-items:center}
+.staff-filters{margin-bottom:18px}
+.staff-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;align-items:start}
+.staff-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px 14px;box-shadow:0 8px 24px #14353608}
+.staff-card.new{border-color:#e9c48e}
+.staff-card.cancelled{opacity:.75}
+.staff-card-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px}
+.staff-card-top b{letter-spacing:1px}
+.staff-card-top time{margin-left:auto;color:#8c9680;font-size:10px}
+.staff-new{background:var(--accent);color:#fff;font-size:9px;font-weight:700;letter-spacing:1px;padding:4px 7px;border-radius:5px}
+.staff-card h3{font-size:17px;margin:12px 0 6px;line-height:1.3}
+.staff-meta{font-size:11px;color:#5f7565;line-height:1.6;margin:3px 0}
+.staff-person{margin-top:12px;padding:12px;background:#f5f6f1;border-radius:10px;display:grid;gap:10px}
+.staff-person>div:first-child{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+.staff-person>div:first-child span{font-size:10px;color:#6f8573}
+.staff-contact{display:flex;flex-wrap:wrap;gap:8px}
+.staff-contact a{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #d8e0d5;border-radius:30px;padding:8px 12px;font-size:11px;font-weight:600}
+.staff-contact a:hover{border-color:var(--ink)}
+.staff-contact .icon{width:13px;height:13px}
+.staff-quote{margin:12px 0 0;padding:10px 12px;border-left:3px solid #d8c49c;background:#fbf8f1;font-size:11px;line-height:1.6;color:#5f6b55;white-space:pre-line}
+.staff-update{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.staff-update summary{cursor:pointer;font-size:11px;font-weight:700;padding:4px 0}
+.staff-update form{display:grid;gap:12px;margin-top:10px}
+.staff-update label{display:grid;gap:6px;font-size:10px;font-weight:600}
+.staff-update label small{font-weight:400;color:#8c9680}
+.staff-form-actions{display:flex;align-items:center;gap:12px}
+.staff-saved{font-size:10px;color:#6f8573}
+
+/* My trips cards */
+.req-card{grid-template-columns:150px 1fr auto}
+.req-card>img,.req-card>.flight-tile{width:100%;height:100%;min-height:150px;object-fit:cover}
+.req-card h3{margin:6px 0 4px}
+
+@media(max-width:620px){
+  .req-summary{grid-template-columns:72px 1fr;gap:4px 13px;align-items:start}
+  .req-summary:not(:has(>img)){display:block}
+  .req-summary>img{width:72px;height:72px;grid-row:1/span 4}
+  .req-summary>*:not(img){grid-column:2}
+  .req-summary>.rate-line,.req-summary>.req-extra,.req-summary>.small-print{grid-column:1/-1}
+  .req-summary .preview-pill{justify-self:start;width:max-content;margin-bottom:6px}
+  .req-card{grid-template-columns:76px 1fr;gap:12px;padding:12px;min-height:0;align-items:start}
+  .req-card>img,.req-card>.flight-tile{width:76px!important;height:76px!important;min-height:0;border-radius:10px;margin:0}
+  .req-card>div:not(.flight-tile){padding:0!important}
+  .req-card>.flight-tile .icon{width:28px;height:28px}
+  .req-card>button{grid-column:1/-1;margin:2px 0 0;width:100%;position:static}
+  .req-card h3{font-size:15px}
+  .staff-page{padding:24px 0 90px}
+  .staff-head{flex-direction:column;align-items:flex-start}
+  .staff-list{grid-template-columns:1fr}
+  .staff-login{padding:24px;margin:10px auto}
+  .req-reach label{flex:1;justify-content:center}
+}
+@media(prefers-reduced-motion:reduce){.staff-card,.req-message{transition:none}}
