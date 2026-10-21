@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#173f42" />
+  <meta name="description" content="A world worth discovering. Explore extraordinary stays, thoughtful journeys, and personal travel support with Uniworld." />
+  <meta property="og:title" content="Uniworld — A world worth discovering" />
+  <meta property="og:description" content="Find your next somewhere. Beautiful stays, inspiring journeys, and your own travel companion." />
+  <meta property="og:image" content="https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1600&q=85&fit=crop" />
+  <meta property="og:url" content="https://abdeeznuts.github.io/" />
+  <title>Uniworld — A world worth discovering</title>
+  <meta name="apple-mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-title" content="Uniworld" /><link rel="apple-touch-icon" href="/icon-192.png" /><link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://images.unsplash.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Manrope:wght@400;500;600;650;700;750;800&family=Cormorant+Garamond:ital,wght@1,500;1,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" /><link rel="stylesheet" href="journeys.css" /><link rel="stylesheet" href="voice-planner.css" /><link rel="stylesheet" href="live-rates.css" /><link rel="preload" as="image" href="/assets/maldives.webp" />
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header"><div class="header-inner">
+    <a href="#home" class="brand" aria-label="Uniworld home"><span class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="15"/><ellipse cx="20" cy="20" rx="7" ry="15"/><path d="M5 20h30M8 11q12 7 24 0M8 29q12-7 24 0"/><path class="orbit" d="M3 30C-3 14 34-5 38 10"/></svg></span><span>uniworld<span class="brand-dot">.</span><small>YOUR WORLD, BEAUTIFULLY CONNECTED</small></span></a>
+    <nav class="main-nav" aria-label="Main navigation"><a href="#home" class="active" data-nav="home">Discover</a><a href="#stays" data-nav="stays">Stays</a><a href="#holidays" data-nav="holidays">Holidays</a><a href="#umrah" data-nav="umrah">Umrah</a><a href="#trips" data-nav="trips">My trips</a></nav>
+    <div class="header-actions"><button class="currency-button" id="currencyButton" aria-label="Change market and currency"><span data-icon="globe"></span><span id="currencyLabel">PKR</span><span data-icon="chevron-down"></span></button><button class="icon-button saved-nav" id="savedButton" aria-label="View saved stays"><span data-icon="heart"></span><i id="savedCount" hidden>0</i></button><button class="dark-button compact" id="advisorButton">Let’s talk travel <span data-icon="arrow-up-right"></span></button><button class="icon-button mobile-menu" id="menuButton" aria-label="Open menu" aria-expanded="false"><span data-icon="menu"></span></button></div>
+  </div></header>
+  <div class="demo-bar"><span><i></i> INVESTOR DEMO <span class="demo-extra">· Simulated bookings, no charges</span></span><button data-action="install">Get the iPhone app ↗</button></div><main id="main" tabindex="-1"></main>
+  <footer class="site-footer"><div class="footer-top wrap"><div><a class="brand footer-brand" href="#home">uniworld<span class="brand-dot">.</span></a><p>Extraordinary places.<br>Thoughtfully connected.</p><button class="text-button" data-action="replay-intro">Replay welcome <span data-icon="volume-2"></span></button><div class="market-label">PAKISTAN <i></i> UNITED KINGDOM <i></i> USA</div></div><div><h3>Your next chapter</h3><a href="#stays">Find a stay</a><a href="#holidays">Explore holidays</a><a href="#umrah">Umrah journeys</a><a href="#flights">Plan a flight</a><a href="#trips">Your saved trips</a></div><div><h3>A real human, always</h3><a href="mailto:contact@uniworldinc.com">contact@uniworldinc.com <span data-icon="arrow-up-right"></span></a><a href="tel:+18444002310">+1 (844) 400-2310</a><a href="https://www.instagram.com/uniworld.pk/" target="_blank" rel="noopener">Follow the journey ↗</a><a href="https://uniworldinc.com/" target="_blank" rel="noopener">About Uniworld ↗</a></div><div class="footer-note"><span class="eyebrow">A LITTLE NOTE</span><p>Explore the complete demo experience. All listings, fares, bookings, and payments are simulated. Your real journey begins with a Uniworld advisor.</p><button class="text-button" data-action="about-preview">About this demo <span data-icon="arrow-right"></span></button></div></div><div class="footer-bottom wrap"><span>© 2026 Uni World Travel Agency. Go somewhere good.</span><div><button data-action="privacy">Privacy</button><button data-action="credits">Photo credits</button><span class="footer-sun" aria-hidden="true">✳︎</span></div></div></footer>
+  <button class="concierge-launcher" id="conciergeButton" aria-label="Open trip inspiration planner"><span data-icon="sparkles"></span><span>Plan a trip with AI</span><span data-icon="arrow-up-right"></span></button>
+  <nav class="mobile-dock" aria-label="App navigation"><a href="#home"><span data-icon="compass"></span>Explore</a><a href="#stays"><span data-icon="bed"></span>Stays</a><button data-action="planner"><span data-icon="sparkles"></span>Planner</button><a href="#trips"><span data-icon="calendar"></span>My trips</a></nav><dialog id="modal" aria-labelledby="modalTitle"><button class="modal-close icon-button" aria-label="Close dialog"><span data-icon="x"></span></button><div id="modalContent"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="wrap">Please enable JavaScript to search stays and plan your trip.</p></noscript>
+</body>
+</html>
