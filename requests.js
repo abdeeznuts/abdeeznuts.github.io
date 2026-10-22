@@ -101,7 +101,7 @@ export function openRequest(trip) {
 
 function summaryCard(t) {
   const p = priceOf(t), e = d.esc;
-  return `<aside class="checkout-summary req-summary">${t.image ? `<img src="${e(t.image)}" alt=""/>` : ''}<span class="preview-pill">${KIND[t.kind] || 'TRIP'}</span><h4>${e(t.title)}</h4>${t.details ? `<p>${e(t.details)}</p>` : ''}<p>${datesOf(t)} · ${people(t)}</p>${p ? `<div class="rate-line rate-total"><span>${p.label}</span><b>${p.value}</b></div>${p.extra ? `<p class="req-extra">${p.extra}</p>` : ''}` : ''}<p class="small-print">Prices change. Your advisor confirms the final price.</p></aside>`;
+  return `<aside class="checkout-summary req-summary">${t.image ? `<img src="${e(t.image)}" alt=""/>` : ''}<span class="preview-pill">${KIND[t.kind] || 'TRIP'}</span><h4>${e(t.title)}</h4>${t.details ? `<p>${e(t.details)}</p>` : ''}${t.chosen ? `<p class="req-chosen">${e(t.chosen)}</p>` : ''}<p>${datesOf(t)} · ${people(t)}</p>${p ? `<div class="rate-line rate-total"><span>${p.label}</span><b>${p.value}</b></div>${p.extra ? `<p class="req-extra">${p.extra}</p>` : ''}` : ''}<p class="small-print">Prices change. Your advisor confirms the final price.</p></aside>`;
 }
 
 async function submit(ev) {
@@ -127,7 +127,7 @@ async function submit(ev) {
     const r = await d.api('requests', 'POST', {
       requestId: draft.requestId, kind: t.kind, productId: t.productId, start: t.start, end: t.end, travelers: t.travelers,
       rooms: t.rooms, room: t.room, from: t.from, to: t.to, cabin: t.cabin, hotelName: t.hotelName, city: t.city,
-      image: t.kind === 'hotel' ? t.image : undefined, seen: t.seen,
+      image: t.kind === 'hotel' ? t.image : undefined, seen: t.seen, chosen: t.chosen,
       name, phone, email, contactBy, note, consent: true, market: d.state.currency,
     });
     d.state.requests = [r, ...d.state.requests.filter((x) => x.recordId !== r.recordId)];
@@ -152,7 +152,7 @@ export function showRequest(r, fresh = false) {
     <div class="confirmation-code">${e(r.id)}</div>
     <span class="req-status ${e(r.status)}">${label}</span>
     ${r.customerMessage ? `<div class="req-message"><span class="eyebrow">MESSAGE FROM UNIWORLD</span><p>${e(r.customerMessage)}</p></div>` : ''}
-    <div class="booking-facts"><strong>${e(r.title)}</strong>${r.details ? `<p>${e(r.details)}</p>` : ''}<p>${datesOf(r)} · ${people(r)}</p>${p ? `<p>${p.label}: <b>${p.value}</b>${p.extra ? ` · ${p.extra}` : ''}</p>` : ''}<small>${e(r.name)} · ${e(r.phone)}${r.email ? ' · ' + e(r.email) : ''}</small></div>
+    <div class="booking-facts"><strong>${e(r.title)}</strong>${r.details ? `<p>${e(r.details)}</p>` : ''}${r.chosen ? `<p>${e(r.chosen)}</p>` : ''}<p>${datesOf(r)} · ${people(r)}</p>${p ? `<p>${p.label}: <b>${p.value}</b>${p.extra ? ` · ${p.extra}` : ''}</p>` : ''}<small>${e(r.name)} · ${e(r.phone)}${r.email ? ' · ' + e(r.email) : ''}</small></div>
     <div class="booking-actions">${contactButtons(r)}<button class="text-button" data-action="req-summary" data-id="${e(r.recordId)}">${ic('download')} Download summary</button><button class="text-button" data-action="bookings">Go to My trips ${ic('arrow-right')}</button>${open ? `<button class="text-button danger" data-action="req-cancel" data-id="${e(r.recordId)}">Cancel request</button>` : ''}</div>
   </div>`);
 }
@@ -172,6 +172,7 @@ function summaryText(r) {
   const p = priceOf(r);
   const lines = ['UNIWORLD — BOOKING REQUEST', 'This is a request, not a confirmed booking.', '', `Reference: ${r.id}`, `Status: ${(STATUS[r.status] || STATUS.new)[0]}`, `Sent: ${new Date(r.created).toLocaleString('en-GB')}`, '', `Trip: ${r.title}`];
   if (r.details) lines.push(`Details: ${r.details}`);
+  if (r.chosen) lines.push(`Option: ${r.chosen}`);
   lines.push(`Dates: ${datesOf(r)}`, `Travelers: ${r.travelers}`);
   if (p) lines.push(`${p.label}: ${p.value}${p.extra ? ' (' + p.extra + ')' : ''}`);
   lines.push('', `Name: ${r.name}`, `Phone / WhatsApp: ${r.phone}`);
@@ -242,6 +243,7 @@ export function mountStaff(main) {
       <div class="staff-card-top"><span class="req-status ${e(r.status)}">${st[0]}</span>${r.created > seen ? '<span class="staff-new">NEW</span>' : ''}<b>${e(r.id)}</b><time datetime="${new Date(r.created).toISOString()}">${ago(r.created)}</time></div>
       <h3>${e(r.title)}</h3>
       <p class="staff-meta">${KIND[r.kind] || 'TRIP'}${r.details ? ' · ' + e(r.details) : ''}</p>
+      ${r.chosen ? `<p class="staff-meta staff-chosen"><b>Picked:</b> ${e(r.chosen)}</p>` : ''}
       <p class="staff-meta">${datesOf(r)} · ${people(r)}${r.market ? ' · ' + e(r.market) + ' market' : ''}</p>
       ${p ? `<p class="staff-meta">${p.label}: <b>${p.value}</b>${p.extra ? ' · ' + p.extra : ''}${r.seen?.airline ? ' · ' + e(r.seen.airline) : ''}${r.seen?.checkedAt ? ' · seen ' + ago(Date.parse(r.seen.checkedAt)) : ''}</p>` : ''}
       <div class="staff-person"><div><b>${e(r.name)}</b><span>Prefers ${REACH[r.contactBy] || 'WhatsApp'}</span></div>

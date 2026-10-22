@@ -100,7 +100,7 @@ export function parseAirport(text) {
   return { code: code || known[1], city: known ? (known[2] || known[0]) : label || code };
 }
 
-async function fetchLive(body) {
+export async function fetchLive(body) {
   // text/plain keeps this a "simple" request, so phones skip the CORS preflight round trip.
   const res = await fetch(ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(body), signal: AbortSignal.timeout(45000) });
   let data = null;
@@ -212,8 +212,8 @@ function flightCard(data) {
     </div>
     ${typical ? `<p class="live-note">${typical}</p>` : ''}
     ${priceTrend(f.insights, cur)}
-    <div class="live-actions">${bookButton(flightPayload(data), 'Book with Uniworld', flightMail(data))}<a class="live-link" href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ${ic('arrowUpRight')}</a></div>
-    <span class="live-stamp">${f.stale ? 'Last checked' : 'Checked'} ${ago(f.fetchedAt)}${f.compared ? ` · ${f.compared} fares compared` : ''}</span>
+    <div class="live-actions">${bookButton(flightPayload(data), 'Book with Uniworld', flightMail(data))}${ctx?.onAllFlights ? `<button type="button" class="live-link" data-action="live-all-flights" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-depart="${esc(t.depart)}" data-return="${esc(t.return || '')}" data-adults="${f.travelers || 1}">All ${f.compared ? f.compared + ' ' : ''}flights ${ic('arrowRight')}</button>` : `<a class="live-link" href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ${ic('arrowUpRight')}</a>`}</div>
+    <span class="live-stamp">${f.stale ? 'Last checked' : 'Checked'} ${ago(f.fetchedAt)}${f.compared ? ` · ${f.compared} fares compared` : ''} · <a href="${esc(f.link || data.links.flights)}" target="_blank" rel="noopener">Google Flights ↗</a></span>
   </article>`;
 }
 
@@ -231,8 +231,8 @@ function hotelCard(data) {
       <div class="live-price"><strong>${money(h.pricePerNight, cur)}</strong><small>per night${h.total ? ` · ${money(h.total, cur)} for ${s.nights} night${s.nights > 1 ? 's' : ''}` : ''}</small></div>
       <p class="live-dates">${dayLabel(s.checkIn)} → ${dayLabel(s.checkOut)} · ${s.guests} guest${s.guests > 1 ? 's' : ''}</p>
       ${alt ? `<a class="live-alt" href="${esc(alt.link || s.link)}" target="_blank" rel="noopener"><span>Best-rated cheap pick</span><b>${esc(alt.name)}</b><small>${alt.rating ? `★ ${alt.rating.toFixed(1)} · ` : ''}${money(alt.pricePerNight, cur)} / night</small></a>` : ''}
-      <div class="live-actions">${bookButton(hotelPayload(data, h), 'Book with Uniworld', hotelMail(data, h))}<a class="live-link" href="${esc(h.link || s.link)}" target="_blank" rel="noopener">Google Hotels ${ic('arrowUpRight')}</a></div>
-      <span class="live-stamp">${s.stale ? 'Last checked' : 'Checked'} ${ago(s.fetchedAt)}${s.compared ? ` · ${s.compared} stays compared` : ''}</span>
+      <div class="live-actions">${bookButton(hotelPayload(data, h), 'Book with Uniworld', hotelMail(data, h))}${ctx?.onAllHotels ? `<button type="button" class="live-link" data-action="live-all-hotels" data-place="${esc(String(s.city || '').split(' · ')[0])}" data-checkin="${esc(s.checkIn)}" data-checkout="${esc(s.checkOut)}" data-adults="${s.guests || 2}">All hotels ${ic('arrowRight')}</button>` : `<a class="live-link" href="${esc(h.link || s.link)}" target="_blank" rel="noopener">Google Hotels ${ic('arrowUpRight')}</a>`}</div>
+      <span class="live-stamp">${s.stale ? 'Last checked' : 'Checked'} ${ago(s.fetchedAt)}${s.compared ? ` · ${s.compared} stays compared` : ''} · <a href="${esc(h.link || s.link)}" target="_blank" rel="noopener">Google Hotels ↗</a></span>
     </div>
   </article>`;
 }
@@ -428,6 +428,8 @@ function onClick(e) {
   if (!b) return;
   const action = b.dataset.action;
   if (action === 'live-search') openLiveSearch(ctx.getDates?.() || {});
+  else if (action === 'live-all-flights') ctx?.onAllFlights?.({ from: airportLabel(b.dataset.from), to: airportLabel(b.dataset.to), depart: b.dataset.depart, return: b.dataset.return, adults: Number(b.dataset.adults) || 1 });
+  else if (action === 'live-all-hotels') ctx?.onAllHotels?.({ place: b.dataset.place, checkIn: b.dataset.checkin, checkOut: b.dataset.checkout, adults: Number(b.dataset.adults) || 2 });
   else if (action === 'live-book') {
     const payload = bookables.get(b.dataset.book);
     if (payload && ctx?.onBook) ctx.onBook(payload);

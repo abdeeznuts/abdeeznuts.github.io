@@ -5,9 +5,10 @@ The Uniworld travel app: Umrah journeys, stays, flights and holidays, with live 
 - **Live app:** https://abdeeznuts.github.io/
 - **Team inbox:** https://abdeeznuts.github.io/#staff
 - **Hosting:** GitHub Pages. The files in this repo are the whole front end, with no build step.
+- **Live listings:** the Stays page searches every hotel on Google Hotels (photos, ratings, prices from booking sites, filters, paging) and the Flights page lists every Google Flights option. Each fresh search uses one SerpApi search; results are cached for 6 hours.
 - **Backend:** Supabase project `imytqgeldrfmxsxszrqs` ("uniworld").
   - Edge Function `uniworld-api`: booking requests, the team inbox, wish list and saved itineraries. Customers get a private device ID, so nobody has to sign in.
-  - Edge Function `uniworld-live-rates`: live prices from Google Flights and Google Hotels through SerpApi, cached to stay inside the plan.
+  - Edge Function `uniworld-live-rates`: live data from Google Flights and Google Hotels through SerpApi (`deal`/`search` for the home cards, `hotels` for hotel search, `hotel` for one hotel's details, `flights` for flight lists), cached and capped by `UNIWORLD_SERPAPI_MONTHLY_CAP` (default 240).
 
 ## How booking works
 
