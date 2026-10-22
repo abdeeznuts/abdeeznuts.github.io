@@ -349,7 +349,7 @@ function renderFlights(el, fs) {
   const e = d.esc;
   const head = `<div class="lf-head"><span class="eyebrow">LIVE FROM GOOGLE FLIGHTS</span><h2>${e(airportLabel(fs.a.code))} → ${e(airportLabel(fs.b.code))}</h2><p>${flightSummary(fs)}</p></div>`;
   if (!fs.data) { el.innerHTML = head + `<div class="lf-list">${noticeCard(fs.notice, 'retry', 'lf')}</div>`; return; }
-  const all = fs.data.options, cheapest = Math.min(...all.map((o) => o.price)), fastest = Math.min(...all.map((o) => o.durationMin ?? 1e9));
+  const all = fs.data.options, cheapest = Math.min(...all.map((o) => o.price)), fastest = Math.min(...all.map((o) => o.durationMin ?? 1e9)), bestIndex = all.findIndex((o) => o.best);
   const options = sortedOptions(fs);
   const ins = fs.data.insights;
   const level = { low: 'Prices are low right now', typical: 'Prices are typical right now', high: 'Prices are higher than usual' }[ins?.level];
@@ -359,16 +359,16 @@ function renderFlights(el, fs) {
   el.innerHTML = head
     + (level ? `<p class="lf-insight"><b>${level}.</b>${ins.typical?.length === 2 ? ` Google’s usual range: ${money(ins.typical[0], cur)}–${money(ins.typical[1], cur)}.` : ''}</p>` : '')
     + `<div class="lf-controls"><div role="group" aria-label="Sort flights">${sorts.map(([k, l]) => `<button class="chip ${fs.sort === k ? 'active' : ''}" data-lf="sort" data-v="${k}" aria-pressed="${fs.sort === k}">${l}</button>`).join('')}</div><div role="group" aria-label="Stops">${stops.map(([k, l]) => `<button class="chip ${fs.stops === k ? 'active' : ''}" data-lf="stops" data-v="${k}" aria-pressed="${fs.stops === k}">${l}</button>`).join('')}</div></div>`
-    + `<div class="lf-list">${options.length ? options.map((o) => flightCard(o, fs, all.indexOf(o), cheapest, fastest)).join('') : `<div class="ls-notice"><h3>No flights match.</h3><p>Try allowing more stops.</p></div>`}</div>`
+    + `<div class="lf-list">${options.length ? options.map((o) => flightCard(o, fs, all.indexOf(o), cheapest, fastest, bestIndex)).join('') : `<div class="ls-notice"><h3>No flights match.</h3><p>Try allowing more stops.</p></div>`}</div>`
     + `<p class="ls-foot">${plural(all.length, 'flight')} · live from Google Flights, checked ${e(ago(fs.fetchedAt))}.${fs.end ? ' Round-trip prices include your return; your advisor confirms the return flight.' : ''} A Uniworld advisor confirms the final price before you pay. <a href="${e(fs.data.link)}" target="_blank" rel="noopener">See on Google Flights ↗</a></p>`
     + `<div class="lf-help"><p>Want a different time, airline or a multi-city trip?</p><button class="outline-button compact" data-lf="advisor-request">Ask an advisor</button></div>`;
 }
 
-function flightCard(o, fs, i, cheapest, fastest) {
+function flightCard(o, fs, i, cheapest, fastest, bestIndex) {
   const e = d.esc, cur = fs.currency || d.state.currency, n = Number(fs.travelers) || 1;
   const nextDay = o.depart?.time && o.arrive?.time && o.arrive.time.slice(0, 10) > o.depart.time.slice(0, 10);
   const via = o.layovers.map((l) => l.id).filter(Boolean).join(', ');
-  const badges = [o.best ? 'Best' : '', o.price === cheapest ? 'Cheapest' : '', o.durationMin === fastest ? 'Fastest' : ''].filter(Boolean);
+  const badges = [i === bestIndex ? 'Best' : '', o.price === cheapest ? 'Cheapest' : '', o.durationMin === fastest ? 'Fastest' : ''].filter(Boolean);
   return `<article class="lf-card">
     <div class="lf-top">${o.logo ? `<img class="live-img live-logo" src="${e(o.logo)}" alt="" width="22" height="22" data-fallback="1"/>` : ''}<span>${e(o.airlines.join(' + ') || 'Airline')}</span>${badges.map((b) => `<span class="lf-badge">${b}</span>`).join('')}</div>
     <div class="lf-route">

@@ -204,3 +204,8 @@
 .search-tabs{overflow-x:auto;scrollbar-width:none;max-width:100%}
 .search-tabs::-webkit-scrollbar{display:none}
 .search-tabs button{flex-shrink:0}
+
+/* Keep the flight search form inside the screen on phones (date fields have a wide minimum size). */
+.flight-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.flight-form .field-input{min-width:0}
+@media(max-width:900px){.flight-panel{grid-template-columns:minmax(0,1fr)}}
