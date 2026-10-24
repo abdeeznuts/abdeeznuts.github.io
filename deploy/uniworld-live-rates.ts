@@ -731,13 +731,18 @@ function splitTickets(first: any, second: any, minGap: number, maxGap: number) {
   const seen = new Set<string>();
   return out.filter((c) => { const k = c.hub + '|' + c.first.legs.map((l: any) => l.flightNumber).join() + '|' + c.second.legs.map((l: any) => l.flightNumber).join(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
 }
+// Big connecting airports. A hidden-city search leaves these out as connections (except the traveler's
+// own destination), so Google's short list is filled with tickets that change planes at the destination.
+const BIG_HUBS = ('DXB DOH IST SAW AUH SHJ JED RUH DMM MED MCT BAH KWI AMM BEY CAI ADD NBO FRA AMS CDG LHR MUC ZRH VIE ' +
+  'SIN KUL BKK HKG ICN NRT HND PEK PVG CAN DEL BOM ATL ORD DFW JFK EWR IAD IAH LAX SFO YYZ MAD BCN FCO MXP CPH ARN HEL ' +
+  'WAW TBS GYD TAS ALA CMB DAC KTM').split(' ');
 async function flightHacks(kind: string, input: Record<string, unknown>, db: any, apiKey: string, origin: string | null) {
   try {
-    const run = async (f: any) => {
-      const key = 'fl|' + JSON.stringify([f.from, f.to, f.depart, null, f.adults, f.cabin, f.currency]);
+    const run = async (f: any, extra: Record<string, string> | null = null) => {
+      const key = extra ? 'hc|' + JSON.stringify([f.from, f.to, f.depart, f.adults, f.cabin, f.currency, extra]) : 'fl|' + JSON.stringify([f.from, f.to, f.depart, null, f.adults, f.cabin, f.currency]);
       return cachedSearch(db, apiKey, key, TTL_HOURS.list, async () => flightList(await serp({
         engine: 'google_flights', departure_id: f.from, arrival_id: f.to, outbound_date: f.depart, type: '2',
-        adults: String(f.adults), travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en',
+        adults: String(f.adults), travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en', ...(extra ?? {}),
       }, apiKey), f));
     };
     if (kind === 'hidden-city') {
@@ -745,7 +750,7 @@ async function flightHacks(kind: string, input: Record<string, unknown>, db: any
       const targets = airportCodes(input.target);
       if (!targets) throw new Invalid('Choose your destination airport.');
       if (f.to.split(',').some((c) => targets.includes(c))) throw new Invalid('Choose cities past your destination.');
-      const r = await run(f);
+      const r = await run(f, { exclude_conns: BIG_HUBS.filter((c) => !targets.includes(c)).join(','), show_hidden: 'true' });
       const deals = r.payload ? hiddenCityDeals(r.payload, targets) : [];
       return reply({ ok: deals.length > 0, kind, currency: f.currency, search: { from: f.from, target: targets.join(','), beyond: f.to, depart: f.depart, adults: f.adults }, data: r.payload ? { deals, link: r.payload.link } : null, fetchedAt: r.fetchedAt, stale: r.stale, notice: r.payload ? (deals.length ? null : 'empty') : r.notice }, 200, origin);
     }
@@ -825,7 +830,7 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.3';
+const BUILD = '2026-10-24.4';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
