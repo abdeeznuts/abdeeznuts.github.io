@@ -369,6 +369,108 @@ function savedHotelsFrom(v: unknown) {
   }).filter((h) => h.token && h.name && !seen.has(h.token) && seen.add(h.token)).slice(0, 50);
 }
 
+// ---------- Phone alerts (Web Push: no third-party account needed) ----------
+// The app's own VAPID key pair is created on first use and kept in the database (service role only).
+// Alerts go to the team's phones when a request or a payment arrives, and to the customer's
+// phones when the team updates their booking.
+const PUSH_HOSTS = /(^|\.)(fcm\.googleapis\.com|android\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
+const te = new TextEncoder();
+const b64u = (bytes: Uint8Array) => { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64u = (s: string) => { const t = s.replace(/-/g, '+').replace(/_/g, '/'); const b = atob(t + '='.repeat((4 - (t.length % 4)) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+const concatBytes = (...parts: Uint8Array[]) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let i = 0; for (const p of parts) { out.set(p, i); i += p.length; } return out; };
+async function hmac(key: Uint8Array, data: Uint8Array) {
+  const k = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', k, data));
+}
+function subscriptionFrom(v: any) {
+  const endpoint = safe(v?.endpoint, 800), p256dh = safe(v?.keys?.p256dh, 200), auth = safe(v?.keys?.auth, 100);
+  let host = '';
+  try { const u = new URL(endpoint); if (u.protocol === 'https:') host = u.hostname; } catch { /* checked below */ }
+  let keysOk = false;
+  try { keysOk = unb64u(p256dh).length === 65 && unb64u(auth).length === 16; } catch { keysOk = false; }
+  if (!host || !PUSH_HOSTS.test(host) || !keysOk) throw new HttpError('Alerts aren’t supported in this browser yet.');
+  return { endpoint, keys: { p256dh, auth }, created: Date.now() };
+}
+const subId = async (endpoint: string) => Array.from(await digest('push|' + endpoint), (b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+
+async function vapidKeys(records: () => any) {
+  const found = await records().select('body').eq('id', 'system:vapid').maybeSingle();
+  if (found.data?.body?.publicKey) return found.data.body;
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']) as CryptoKeyPair;
+  const created = { publicKey: b64u(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))), privateJwk: await crypto.subtle.exportKey('jwk', pair.privateKey), created: Date.now() };
+  await records().upsert({ id: 'system:vapid', owner: 'system', kind: 'config', body: created, created: Date.now() }, { onConflict: 'id', ignoreDuplicates: true });
+  const again = await records().select('body').eq('id', 'system:vapid').maybeSingle(); // keep the stored pair if two requests raced
+  return again.data?.body ?? created;
+}
+async function vapidHeader(endpoint: string, keys: any) {
+  const key = await crypto.subtle.importKey('jwk', keys.privateJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const part = (o: unknown) => b64u(te.encode(JSON.stringify(o)));
+  const unsigned = `${part({ typ: 'JWT', alg: 'ES256' })}.${part({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'mailto:contact@uniworldinc.com' })}`;
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(unsigned)));
+  return `vapid t=${unsigned}.${b64u(sig)}, k=${keys.publicKey}`;
+}
+// RFC 8291 message encryption (aes128gcm), so alerts can carry their text.
+async function encryptPush(sub: any, payload: Uint8Array) {
+  const uaPublic = unb64u(sub.keys.p256dh), authSecret = unb64u(sub.keys.auth);
+  const local = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']) as CryptoKeyPair;
+  const asPublic = new Uint8Array(await crypto.subtle.exportKey('raw', local.publicKey));
+  const uaKey = await crypto.subtle.importKey('raw', uaPublic, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: uaKey }, local.privateKey, 256));
+  const ikm = (await hmac(await hmac(authSecret, shared), concatBytes(te.encode('WebPush: info\0'), uaPublic, asPublic, new Uint8Array([1])))).slice(0, 32);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const prk = await hmac(salt, ikm);
+  const cek = (await hmac(prk, te.encode('Content-Encoding: aes128gcm\0\x01'))).slice(0, 16);
+  const nonce = (await hmac(prk, te.encode('Content-Encoding: nonce\0\x01'))).slice(0, 12);
+  const aes = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aes, concatBytes(payload, new Uint8Array([2]))));
+  const header = new Uint8Array(21 + asPublic.length);
+  header.set(salt, 0);
+  new DataView(header.buffer).setUint32(16, 4096);
+  header[20] = asPublic.length;
+  header.set(asPublic, 21);
+  return concatBytes(header, cipher);
+}
+// One alert to each phone; forgets phones the push service says are gone.
+async function pushTo(records: () => any, rows: any[], message: { title: string; body: string; url: string; tag?: string }) {
+  if (!rows.length) return;
+  const keys = await vapidKeys(records);
+  const payload = te.encode(JSON.stringify(message));
+  await Promise.all(rows.map(async (row: any) => {
+    try {
+      const sub = row.body;
+      const res = await fetch(sub.endpoint, {
+        method: 'POST',
+        headers: { Authorization: await vapidHeader(sub.endpoint, keys), 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', TTL: '86400', Urgency: 'high' },
+        body: await encryptPush(sub, payload),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.status === 404 || res.status === 410) await records().delete().eq('id', row.id);
+      else if (!res.ok) console.error('Push failed', res.status);
+    } catch (e) { console.error('Push failed', String(e).slice(0, 120)); }
+  }));
+}
+async function pushTeam(records: () => any, message: any) {
+  const { data } = await records().select('id,body').eq('kind', 'push-staff').limit(50);
+  await pushTo(records, data ?? [], message);
+}
+// The phone that sent the request, and any phone that found it with "Find my booking".
+async function pushCustomer(records: () => any, recordKey: string, message: any) {
+  const links = await records().select('owner').eq('kind', 'request-link').eq('body->>key', recordKey).limit(10);
+  const owners = [recordKey.split(':request:')[0], ...(links.data ?? []).map((l: any) => l.owner)];
+  const { data } = await records().select('id,body').eq('kind', 'push').in('owner', owners).limit(30);
+  await pushTo(records, data ?? [], message);
+}
+// What changed, in one line for the customer's alert.
+function updateAlert(before: any, after: any) {
+  const ref = after.id, money = (p: any) => `${p.currency} ${Number(p.amount).toLocaleString('en-US')}`;
+  if (after.payment?.status === 'paid' && before.payment?.status !== 'paid') return { title: `Payment received · ${ref}`, body: `Thank you! ${money(after.payment)} is confirmed for ${after.title}.` };
+  if (after.payment?.status === 'due' && before.payment?.status !== 'due') return { title: `Ready to pay · ${ref}`, body: `${after.title}: ${money(after.payment)} is due. Tap to pay in the app.` };
+  if ((after.documents?.length ?? 0) > (before.documents?.length ?? 0)) return { title: `Travel documents ready · ${ref}`, body: `Your documents for ${after.title} are in the app.` };
+  if (after.status !== before.status) return { title: `${after.status === 'confirmed' ? 'Confirmed' : after.status === 'cancelled' ? 'Cancelled' : 'Update'} · ${ref}`, body: after.status === 'confirmed' ? `${after.title} is confirmed by Uniworld.` : after.status === 'in_progress' ? `An advisor is working on ${after.title}.` : `${after.title} was cancelled.` };
+  if (after.customerMessage && after.customerMessage !== before.customerMessage) return { title: `Message from Uniworld · ${ref}`, body: String(after.customerMessage).slice(0, 140) };
+  return null;
+}
+
 // ---------- Team access ----------
 async function digest(text: string) {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
@@ -430,7 +532,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.1';
+const BUILD = '2026-10-24.2';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -448,12 +550,19 @@ Deno.serve(async (req) => {
     if (path[0] === 'health') return json({ ok: true, build: BUILD, source: await sourceHash() }, 200, origin);
     const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
     const records = () => db.from('uniworld_records');
+    if (path[0] === 'push' && path[1] === 'key' && method === 'GET') return json({ publicKey: (await vapidKeys(records)).publicKey }, 200, origin);
 
     // ----- Team inbox (staff key) -----
     if (path[0] === 'staff') {
       await requireStaff(req);
       if (path[1] === 'check' && method === 'GET') return json({ ok: true }, 200, origin);
       if (path[1] === 'settings' && method === 'GET') return json(await readSettings(records), 200, origin);
+      if (path[1] === 'push' && method === 'POST') {
+        const input = await body(req), sub = subscriptionFrom(input.subscription), id = 'system:push-staff:' + await subId(sub.endpoint);
+        const { error } = input.off ? await records().delete().eq('id', id) : await records().upsert({ id, owner: 'system', kind: 'push-staff', body: sub, created: Date.now() }, { onConflict: 'id' });
+        if (error) throw error;
+        return json({ alerts: !input.off }, 200, origin);
+      }
       if (path[1] === 'settings' && method === 'PUT') {
         const next = settingsFrom(await body(req), await readSettings(records));
         const { error } = await records().upsert({ id: SETTINGS_ID, owner: 'system', kind: 'settings', body: { ...next, updated: Date.now() }, created: Date.now() }, { onConflict: 'id' });
@@ -489,6 +598,8 @@ Deno.serve(async (req) => {
         };
         const { error } = await records().update({ body: record }).eq('id', row.data.id);
         if (error) throw error;
+        const alert = updateAlert(current, record);
+        if (alert) inBackground(pushCustomer(records, row.data.id, { ...alert, url: '/#trips', tag: record.id }));
         return json(record, 200, origin);
       }
       throw new HttpError('Not found.', 404);
@@ -547,7 +658,7 @@ Deno.serve(async (req) => {
       if (error) throw error;
       const saved = await records().select('body').eq('id', key).maybeSingle();
       const result = saved.data?.body ?? record;
-      if (!saved.data || saved.data.body.created === now) inBackground(notifyTeam(result));
+      if (!saved.data || saved.data.body.created === now) inBackground(Promise.all([notifyTeam(result), pushTeam(records, { title: `New ${result.kind === 'umrah' ? 'Umrah ' : ''}request · ${result.id}`, body: `${result.name} · ${result.title}`, url: '/#staff', tag: result.id })]));
       return json(forCustomer(result), 201, origin);
     }
     // Find my booking: the reference plus the phone number or email used on the request.
@@ -588,7 +699,7 @@ Deno.serve(async (req) => {
           payment: { ...current.payment, customerSent: { at: now, note: safe(input.note, 200).replace(/[\u0000-\u001f]+/g, ' ') } },
           history: [...(current.history ?? []), { at: now, status: 'payment_sent', by: 'customer' }].slice(-40),
         };
-        inBackground(notifyTeam(record, 'paid'));
+        inBackground(Promise.all([notifyTeam(record, 'paid'), pushTeam(records, { title: `Payment sent · ${record.id}`, body: `${record.name} says they paid ${record.payment.currency} ${Number(record.payment.amount).toLocaleString('en-US')}${record.payment.customerSent.note ? ` · “${record.payment.customerSent.note}”` : ''}`, url: '/#staff', tag: record.id + '-paid' })]));
       } else throw new HttpError('Choose what to change.');
       const { error } = await records().update({ body: record }).eq('id', row.id);
       if (error) throw error;
@@ -618,6 +729,12 @@ Deno.serve(async (req) => {
       const { error } = await records().update({ body: record }).eq('id', key).eq('owner', owner);
       if (error) throw error;
       return json(record, 200, origin);
+    }
+    if (path[0] === 'push' && !path[1] && method === 'POST') {
+      const input = await body(req), sub = subscriptionFrom(input.subscription), id = owner + ':push:' + await subId(sub.endpoint);
+      const { error } = input.off ? await records().delete().eq('id', id).eq('owner', owner) : await records().upsert({ id, owner, kind: 'push', body: sub, created: Date.now() }, { onConflict: 'id' });
+      if (error) throw error;
+      return json({ alerts: !input.off }, 200, origin);
     }
     if (path[0] === 'saved-hotels' && method === 'PUT') {
       const hotels = savedHotelsFrom((await body(req)).hotels);
