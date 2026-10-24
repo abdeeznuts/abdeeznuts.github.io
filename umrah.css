@@ -1,0 +1,94 @@
+/* Live Umrah package builder (Umrah page). */
+.um{padding-top:34px}
+.um-head h2{font-size:30px;letter-spacing:-.8px;margin:6px 0 8px;line-height:1.15}
+.um-head p{font-size:13px;color:#5f7565;max-width:620px;line-height:1.6}
+.um-form{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:20px;box-shadow:0 10px 30px #1435360d;display:grid;gap:14px}
+.um-presets{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.um-presets::-webkit-scrollbar{display:none}
+.um-presets .chip{white-space:nowrap;flex-shrink:0}
+.um-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.um-grid>label{display:grid;gap:7px;font-size:11px;font-weight:600;min-width:0}
+.um-grid .field-input{width:100%;min-width:0}
+.um-seg{border:0;padding:0;margin:0;min-width:0}
+.um-seg legend{font-size:11px;font-weight:600;margin-bottom:7px;padding:0}
+.um-seg>div{display:flex;gap:6px;flex-wrap:wrap}
+.um-seg label{display:inline-flex;align-items:center;gap:6px;border:1px solid #dce2d8;border-radius:12px;padding:9px 12px;font-size:12px;cursor:pointer;background:#fff;flex:1;justify-content:center;min-width:0}
+.um-seg label:has(input:checked){border-color:var(--ink);background:#eef3ee;font-weight:700}
+.um-seg input{accent-color:var(--ink);margin:0}
+.um-seg small{display:block;font-size:9px;font-weight:400;color:#6f8573}
+.um-levels{grid-column:span 2}
+.um-plan{display:flex;align-items:center;gap:8px;font-size:12px;color:#355a4b;background:#f2f6f1;border-radius:10px;padding:10px 12px;min-height:20px}
+.um-plan:empty{display:none}
+.um-plan .icon{width:15px;height:15px;flex-shrink:0}
+.um-submit{width:100%;justify-content:center}
+.um-results{margin-top:22px;scroll-margin-top:80px}
+.um-loading{display:grid;gap:12px}
+.um-summary{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:18px;padding:22px}
+.um-summary .eyebrow{color:#d9c79f}
+.um-summary h3{font-size:24px;margin:6px 0 4px;color:#fff}
+.um-summary p{font-size:12px;color:#d6e2dc}
+.um-total{text-align:right;display:grid;gap:3px}
+.um-total strong{font-size:30px;letter-spacing:-.6px}
+.um-total small{font-size:11px;color:#d6e2dc}
+.um-parts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
+.um-part{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.um-part.ls-skel{min-height:200px}
+.um-part-head{display:flex;align-items:flex-start;gap:10px}
+.um-part-head>div{flex:1;min-width:0}
+.um-part-head h4{font-size:15px;margin-top:3px;line-height:1.3;display:flex;align-items:center;gap:6px;overflow-wrap:anywhere}
+.um-part-head .text-button{padding:2px 0;font-size:12px;text-decoration:underline;flex-shrink:0}
+.um-step{width:26px;height:26px;border-radius:50%;background:#eef3ee;color:var(--ink);display:grid;place-items:center;font-size:12px;font-weight:700;flex-shrink:0}
+.um-route{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px}
+.um-route b{font-size:18px}
+.um-route small{display:block;font-size:10px;color:#6f8573}
+.um-route>div:last-child{text-align:right}
+.um-mid{text-align:center}
+.um-mid i{display:block;height:1px;background:#cfd8cf;margin:4px 0}
+.um-sub{font-size:11px;color:#5f7565;line-height:1.5}
+.um-walk{display:flex;align-items:center;gap:5px;font-size:11px;color:#2f6b45;font-weight:600}
+.um-walk .icon{width:13px;height:13px}
+.um-hotel-row{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;align-items:start}
+.um-hotel-row img{width:84px;height:84px;border-radius:10px;object-fit:cover;background:#e4ece6}
+.um-hotel-row:not(:has(img)){grid-template-columns:minmax(0,1fr)}
+.um-price{margin-top:auto;padding-top:10px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.um-price b{font-size:17px}
+.um-price small{font-size:10px;color:#6f8573}
+.um-notice{font-size:12px;color:#8a5a1f;background:#fff6e8;border-radius:10px;padding:10px 12px;line-height:1.5}
+.um-extra{margin-top:12px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 18px}
+.um-extra h4{display:flex;align-items:center;gap:8px;font-size:13px}
+.um-extra h4 .icon{width:16px;height:16px}
+.um-extra ul{margin:8px 0 0 18px;font-size:12px;color:#5f7565;line-height:1.8}
+.um-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.um-actions .dark-button{flex:1;min-width:220px;justify-content:center}
+/* Picker (change flight / hotel) */
+.um-picker h2{font-size:24px;margin:6px 0}
+.um-picker>p{font-size:12px;color:#6f8573}
+.um-pick-list{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:8px}
+.um-pick-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}
+.um-pick-list li:has(img),.um-pick-list li:has(.um-noimg){grid-template-columns:56px minmax(0,1fr) auto}
+.um-pick-list li.is-picked{border-color:var(--ink);background:#f2f6f1}
+.um-pick-list img,.um-noimg{width:56px;height:56px;border-radius:8px;object-fit:cover;background:#e4ece6;display:block}
+.um-pick-list b{font-size:13px;overflow-wrap:anywhere}
+.um-pick-list small{display:block;font-size:10px;color:#6f8573;margin-top:3px;line-height:1.5}
+.um-pick-list .lf-badge{margin-left:6px}
+.um-pick-price{text-align:right;display:grid;gap:4px;justify-items:end}
+.um-pick-price span{font-size:10px;font-weight:700;color:#2f6b45}
+@media(max-width:860px){
+  .um-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .um-levels{grid-column:1/-1}
+  .um-parts{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:520px){
+  .um-head h2{font-size:25px}
+  .um-form{padding:16px}
+  .um-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .um-from{grid-column:1/-1}
+  .um-seg label{padding:9px 8px;font-size:11px}
+  .um-summary{padding:18px}
+  .um-total{text-align:left}
+  .um-total strong{font-size:26px}
+  .um-pick-list li,.um-pick-list li:has(img),.um-pick-list li:has(.um-noimg){grid-template-columns:48px minmax(0,1fr);}
+  .um-pick-list li:not(:has(img)):not(:has(.um-noimg)){grid-template-columns:minmax(0,1fr)}
+  .um-pick-list img,.um-noimg{width:48px;height:48px}
+  .um-pick-price{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center}
+}

@@ -209,3 +209,24 @@
 .flight-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 .flight-form .field-input{min-width:0}
 @media(max-width:900px){.flight-panel{grid-template-columns:minmax(0,1fr)}}
+
+/* Wish list hearts on live hotels */
+.ls-card{position:relative}
+.ls-save{position:absolute;top:10px;right:10px;left:auto;z-index:2;width:36px;height:36px;border-radius:50%;background:#ffffffe6;border:0;display:grid;place-items:center;box-shadow:0 4px 12px #0b2b2d26;color:var(--ink)}
+.ls-save .icon{width:17px;height:17px}
+.ls-save.saved,.hd-save.saved{color:#d0473a}
+.ls-save.saved .icon,.hd-save.saved .icon{fill:currentColor}
+.ls-card .ls-deal{left:10px}
+.hd-save{display:inline-flex;align-items:center;gap:7px;border:1px solid #dce2d8;background:#fff;border-radius:30px;padding:8px 14px;font-size:12px;font-weight:600;margin:4px 0 12px}
+.hd-save .icon{width:16px;height:16px}
+.hd-checking{font-size:15px!important;color:#6f8573}
+
+/* Suggestions for airports and cities (worldwide) */
+.ap-host{position:relative}
+.ap-list{position:absolute;left:0;right:0;top:100%;z-index:60;margin:4px 0 0;padding:6px;list-style:none;background:#fff;border:1px solid #d8e0d5;border-radius:12px;box-shadow:0 16px 40px #0b2b2d26;max-height:320px;overflow-y:auto}
+.ap-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border-radius:8px;cursor:pointer;font-size:13px;text-align:left}
+.ap-list li.is-active,.ap-list li:hover{background:#eef3ee}
+.ap-main{display:grid;min-width:0}
+.ap-main b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap-main small{font-size:10px;color:#6f8573;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ap-list code{font-family:inherit;font-weight:700;font-size:11px;background:#eef3ee;border-radius:6px;padding:3px 6px;letter-spacing:.5px;flex-shrink:0}

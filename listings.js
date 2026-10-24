@@ -1,7 +1,8 @@
 // Live listings, Booking.com style: real hotels from Google Hotels and real flights
 // from Google Flights, through Uniworld's price service. Every result can be booked
 // with a request to a Uniworld advisor (no payment in the app).
-import { fetchLive, money, parseAirport, AIRPORTS } from './live-rates.js';
+import { fetchLive, money, parseAirport, sameAirports, AIRPORTS } from './live-rates.js';
+import { loadWorld, airportByCode, labelOf } from './places.js';
 
 let d = null; // helpers from app.js: openModal, openRequest, esc, icon, state, toast
 
@@ -28,6 +29,40 @@ export function initListings(deps) {
   document.addEventListener('click', onDocClick);
 }
 
+// ---------- Wish list: live hotels saved with the heart ----------
+const savedList = () => (Array.isArray(d.state.savedHotels) ? d.state.savedHotels : []);
+const isSaved = (h) => !!h?.token && savedList().some((x) => x.token === h.token);
+function snapshot(h, st) {
+  return {
+    token: h.token, name: h.name, city: st.label, q: st.q, image: h.images?.[0]?.large || h.images?.[0]?.thumb || '',
+    stars: h.stars || null, rating: h.rating || null, price: h.pricePerNight || null, currency: st.currency || d.state.currency, savedAt: Date.now(),
+  };
+}
+function toggleSave(h, st) {
+  if (!h?.token) { d.toast('This stay can’t be saved. Book it or ask an advisor instead.'); return; }
+  const on = !isSaved(h);
+  const next = on ? [snapshot(h, st), ...savedList()].slice(0, 50) : savedList().filter((x) => x.token !== h.token);
+  d.onSavedHotels?.(next);
+  document.querySelectorAll(`[data-save-token="${CSS.escape(h.token)}"]`).forEach((b) => {
+    b.classList.toggle('saved', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.setAttribute('aria-label', `${on ? 'Remove' : 'Save'} ${h.name} ${on ? 'from' : 'to'} your wish list`);
+    const t = b.querySelector('.ls-save-text');
+    if (t) t.textContent = on ? 'Saved' : 'Save';
+  });
+  d.toast(on ? 'Saved to your wish list in My trips.' : 'Removed from your wish list.');
+}
+const heart = (h, cls, withText = false) => h.token ? `<button type="button" class="${cls} ${isSaved(h) ? 'saved' : ''}" data-save-token="${d.esc(h.token)}" aria-pressed="${isSaved(h)}" aria-label="${isSaved(h) ? 'Remove' : 'Save'} ${d.esc(h.name)} ${isSaved(h) ? 'from' : 'to'} your wish list">${d.icon('heart')}${withText ? `<span class="ls-save-text">${isSaved(h) ? 'Saved' : 'Save'}</span>` : ''}</button>` : '';
+
+// Open a saved hotel with today's dates and live prices.
+export function openSavedHotel(x) {
+  if (!x?.token) return;
+  const checkIn = d.state.start, checkOut = d.state.end;
+  const h = { token: x.token, name: x.name, type: 'hotel', images: x.image ? [{ large: x.image, thumb: x.image }] : [], stars: x.stars, rating: x.rating, reviews: null, pricePerNight: null, total: null, amenities: [], nearby: [], fromSaved: true };
+  const st = { label: x.city || '', q: x.q || x.city || '', checkIn, checkOut, nights: nightsBetween(checkIn, checkOut), adults: d.state.adults, children: d.state.children, rooms: d.state.rooms, currency: d.state.currency, fetchedAt: null };
+  openHotel(h, st);
+}
+
 // ---------- Helpers ----------
 const cur = () => d.state.currency;
 const day = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
@@ -48,7 +83,7 @@ function ago(iso) {
 function howText(how) { if (!how) return ''; const [t, type] = String(how).split(' · '); return !type ? t : type === 'walking' ? `${t} walk` : `${t} by ${type}`; }
 const ratingWord = (r) => (r >= 4.5 ? 'Excellent' : r >= 4 ? 'Very good' : r >= 3.5 ? 'Good' : r >= 3 ? 'Pleasant' : 'Rated');
 const stars = (n) => (n ? `<span class="ls-stars" aria-label="${n}-star hotel">${'★'.repeat(n)}</span>` : '');
-const airportLabel = (code) => { const a = AIRPORTS.find((x) => x[1] === code); return a ? `${a[0]} (${a[1]})` : code; };
+const airportLabel = (code) => { const w = airportByCode(code); if (w) return labelOf(w); const a = AIRPORTS.find((x) => x[1] === code); return a ? `${a[0]} (${a[1]})` : code; };
 const noticeText = {
   setup: ['Live listings are switching on.', 'Real hotels and fares appear here once the price feed is connected.'],
   limit: ['Live searches are paused for now.', 'This month’s live searches are used up. A Uniworld advisor can still check anything for you.'],
@@ -181,7 +216,7 @@ function hotelCard(h, i, st) {
   const img = h.images[0]?.large || h.images[0]?.thumb;
   const near = h.nearby?.[0];
   return `<article class="ls-card">
-    <button class="ls-photo" data-ls="open" data-i="${i}" aria-label="See ${e(h.name)}">${img ? `<img src="${e(img)}" alt="${e(h.name)}" loading="lazy"/>` : ''}${h.deal ? `<span class="ls-deal">${e(h.deal)}</span>` : ''}${h.images.length > 1 ? `<span class="ls-count">${h.images.length} photos</span>` : ''}</button>
+    ${heart(h, 'ls-save')}<button class="ls-photo" data-ls="open" data-i="${i}" aria-label="See ${e(h.name)}">${img ? `<img src="${e(img)}" alt="${e(h.name)}" loading="lazy"/>` : ''}${h.deal ? `<span class="ls-deal">${e(h.deal)}</span>` : ''}${h.images.length > 1 ? `<span class="ls-count">${h.images.length} photos</span>` : ''}</button>
     <div class="ls-body">
       <h3><button data-ls="open" data-i="${i}">${e(h.name)}</button></h3>
       <p class="ls-kind">${h.type === 'vacation rental' ? 'Apartment / home' : h.stars ? `${stars(h.stars)} ${h.stars}-star hotel` : 'Hotel'}</p>
@@ -199,6 +234,8 @@ function hotelCard(h, i, st) {
 }
 
 function stayAction(ev, root, st) {
+  const sv = ev.target.closest('[data-save-token]');
+  if (sv) { const h = st.hotels.find((x) => x.token === sv.dataset.saveToken); if (h) toggleSave(h, st); return; }
   const b = ev.target.closest('[data-ls]');
   if (!b) return;
   const a = b.dataset.ls;
@@ -222,7 +259,7 @@ function hotelPayload(h, st, room) {
     kind: 'hotel', hotelName: h.name, city: st.label, start: st.checkIn, end: st.checkOut, travelers: st.adults + (st.children || 0),
     image: h.images?.[0]?.large || h.images?.[0]?.thumb || '', title: h.name,
     details: `${plural(st.nights, 'night')} · ${plural(st.adults, 'adult')}${st.children ? ` · ${plural(st.children, 'child')}` : ''}${st.rooms > 1 ? ` · ${st.rooms} rooms` : ''}`,
-    seen: { amount: price, total: total || null, currency: cur, source: 'Google Hotels', checkedAt: st.fetchedAt, per: 'night' },
+    seen: price ? { amount: price, total: total || null, currency: cur, source: 'Google Hotels', checkedAt: st.fetchedAt, per: 'night' } : undefined,
     chosen: parts.join(' · ').slice(0, 290),
   };
 }
@@ -243,8 +280,9 @@ function openHotel(h, st) {
       <h2 id="modalTitle">${e(h.name)}</h2>
       ${h.rating ? `<p class="ls-rating hd-rating"><b>${h.rating.toFixed(1)}</b><span>${ratingWord(h.rating)}</span>${h.reviews ? `<small>${h.reviews.toLocaleString('en-US')} reviews</small>` : ''}${h.locationRating ? `<small>· Location ${h.locationRating.toFixed(1)}</small>` : ''}</p>` : ''}
       <p class="hd-address" id="hdAddress">${h.nearby?.[0] ? `${ic('pin')} ${e(h.nearby[0].how ? howText(h.nearby[0].how) + ' to ' : '')}${e(h.nearby[0].name)}` : ''}</p>
+      ${heart(h, 'hd-save', true)}
       <div class="hd-pricebox">
-        <div><strong>${money(h.pricePerNight, cur)}</strong><small>per night</small>${h.total ? `<small>${money(h.total, cur)} for ${plural(st.nights, 'night')}</small>` : ''}<small>${weekday(st.checkIn)} → ${weekday(st.checkOut)} · ${plural(st.adults, 'adult')}</small></div>
+        <div id="hdPriceNow">${h.pricePerNight ? `<strong>${money(h.pricePerNight, cur)}</strong><small>per night</small>${h.total ? `<small>${money(h.total, cur)} for ${plural(st.nights, 'night')}</small>` : ''}` : '<strong class="hd-checking">Checking today’s price…</strong>'}<small>${weekday(st.checkIn)} → ${weekday(st.checkOut)} · ${plural(st.adults, 'adult')}</small></div>
         <button class="dark-button" data-hd="book">Book with Uniworld ${ic('arrow-right')}</button>
         <p>No payment now. A Uniworld advisor confirms the room and the final price with you.</p>
       </div>
@@ -265,6 +303,7 @@ async function loadDetail(h, st) {
   try {
     const res = await fetchLive({ kind: 'hotel', token: h.token, checkIn: st.checkIn, checkOut: st.checkOut, adults: st.adults, currency: st.currency || cur() });
     if (!shown || shown.h !== h || !document.getElementById('hdPrices')) return;
+    if (res.fetchedAt && !st.fetchedAt) st.fetchedAt = res.fetchedAt;
     if (!res.data) { document.getElementById('hdPrices').innerHTML = `<h3>Prices on booking sites</h3><p>${d.esc((noticeText[res.notice] || noticeText.unavailable)[1])}</p>`; return; }
     shown.detail = res.data;
     fillDetail(h, st, res.data);
@@ -279,6 +318,12 @@ function fillDetail(h, st, x) {
   const $ = (id) => document.getElementById(id);
   if (x.images.length > h.images.length) $('hdGallery').innerHTML = x.images.map((im, i) => `<img src="${e(im.large || im.thumb)}" alt="${e(x.name)} photo ${i + 1}" ${i ? 'loading="lazy"' : ''}/>`).join('');
   if (x.address) { $('hdAddress').innerHTML = `${ic('pin')} ${e(x.address)}`; h.address = x.address; }
+  if (x.pricePerNight && (!h.pricePerNight || h.fromSaved)) {
+    h.pricePerNight = x.pricePerNight; h.total = x.total;
+    if (!h.images.length && x.images.length) h.images = x.images;
+    const now = $('hdPriceNow');
+    if (now) now.innerHTML = `<strong>${money(x.pricePerNight, cur)}</strong><small>per night</small>${x.total ? `<small>${money(x.total, cur)} for ${plural(st.nights, 'night')}</small>` : ''}<small>${weekday(st.checkIn)} → ${weekday(st.checkOut)} · ${plural(st.adults, 'adult')}</small>`;
+  }
   $('hdPrices').innerHTML = `<h3>Prices on booking sites</h3>${x.prices.length ? `<ul class="hd-prices">${x.prices.map((p) => `<li><span class="hd-src">${p.logo ? `<img class="live-img live-logo" src="${e(p.logo)}" alt="" width="18" height="18" data-fallback="1"/>` : ''}${e(p.source)}${p.official ? ' <small>Official site</small>' : ''}</span><span class="hd-amt"><b>${money(p.pricePerNight, cur)}</b>${p.total ? `<small>${money(p.total, cur)} total</small>` : ''}${p.freeCancellation ? `<small class="hd-free">Free cancellation${p.freeCancellationUntil ? ' until ' + e(p.freeCancellationUntil) : ''}</small>` : ''}</span></li>`).join('')}</ul><p class="hd-note">Book with Uniworld and your advisor matches the best real price.</p>` : '<p>No booking-site prices for these dates.</p>'}${x.typical ? `<p class="hd-note">Usual price here: ${money(x.typical[0], cur)}–${money(x.typical[1], cur)} a night.</p>` : ''}`;
   if (x.rooms.length) {
     const rooms = $('hdRooms');
@@ -296,6 +341,8 @@ function fillDetail(h, st, x) {
 }
 
 function onDocClick(ev) {
+  const sv = ev.target.closest('.hd-save[data-save-token]');
+  if (sv && shown) { toggleSave(shown.h, shown.st); return; }
   const b = ev.target.closest('[data-hd]');
   if (!b || !shown) return;
   if (b.dataset.hd === 'book') bookHotel(shown.h, shown.st);
@@ -307,9 +354,10 @@ const CABIN_NAMES = { Economy: 'Economy', 'Premium economy': 'Premium economy', 
 
 export async function searchFlights(el, search) {
   if (!el) return;
+  await loadWorld();
   const a = parseAirport(search.from), b = parseAirport(search.to);
-  if (!a || !b) { el.innerHTML = `<div class="ls-notice"><h3>Which airports?</h3><p>Pick airports from the list, or type a 3-letter code like KHI or JED.</p></div>`; return; }
-  if (a.code === b.code) { el.innerHTML = `<div class="ls-notice"><h3>Choose two different airports.</h3></div>`; return; }
+  if (!a || !b) { el.innerHTML = `<div class="ls-notice"><h3>Which airports?</h3><p>Start typing a city or airport and pick it from the list, or type a 3-letter code like KHI or JFK.</p></div>`; return; }
+  if (sameAirports(a, b)) { el.innerHTML = `<div class="ls-notice"><h3>Choose two different airports.</h3></div>`; return; }
   const fs = { a, b, ...search, cabin: CABIN_NAMES[search.cabin] || 'Economy', sort: 'best', stops: 'any', data: null, fetchedAt: null };
   el._flights = fs;
   if (!el._wired) {
@@ -320,7 +368,7 @@ export async function searchFlights(el, search) {
   el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
   const slow = setTimeout(() => { const w = el.querySelector('.ls-wait'); if (w) w.textContent = 'Comparing airlines and routes. This can take a few seconds…'; }, 5000);
   try {
-    const res = await fetchLive({ kind: 'flights', from: a.code, to: b.code, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, cabin: fs.cabin, currency: cur() });
+    const res = await fetchLive({ kind: 'flights', from: a.ids || a.code, to: b.ids || b.code, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, cabin: fs.cabin, currency: cur() });
     if (el._flights !== fs) return;
     fs.data = res.data; fs.fetchedAt = res.fetchedAt; fs.notice = res.data ? (res.stale ? 'partial' : null) : (res.notice || 'unavailable'); fs.currency = res.currency;
     renderFlights(el, fs);

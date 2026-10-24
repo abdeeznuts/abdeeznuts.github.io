@@ -3,6 +3,8 @@
 // service (a Supabase function that keeps the API key off the phone and caches
 // results). "Book with Uniworld" opens the app's request form with the price
 // the customer saw; an advisor confirms and books.
+import { airportByCode, searchAirports, loadWorld, attachAirportPicker, labelOf } from './places.js';
+
 const ENDPOINT = 'https://imytqgeldrfmxsxszrqs.supabase.co/functions/v1/uniworld-live-rates';
 const ADVISOR_EMAIL = 'contact@uniworldinc.com';
 
@@ -87,18 +89,24 @@ function ago(iso) {
   return 'on ' + new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 const isoAdd = (days) => { const d = new Date(); d.setDate(d.getDate() + days); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-const airportLabel = (code) => { const a = AIRPORTS.find((x) => x[1] === code); return a ? `${a[0]} (${a[1]})` : code; };
+const airportLabel = (code) => { const w = airportByCode(code); if (w) return labelOf(w); const a = AIRPORTS.find((x) => x[1] === code); return a ? `${a[0]} (${a[1]})` : code; };
 
+// Any airport in the world: "London Heathrow (LHR)", "LHR", "Tokyo", or a whole city
+// ("London · all airports (LON)" searches LHR, LGW, STN… together; ids holds the list).
 export function parseAirport(text) {
   const raw = String(text ?? '').trim();
   if (!raw) return null;
   const inParens = raw.match(/\(([A-Za-z]{3})\)\s*$/);
   const code = inParens ? inParens[1].toUpperCase() : /^[A-Za-z]{3}$/.test(raw) ? raw.toUpperCase() : null;
+  const w = code ? airportByCode(code) : searchAirports(raw, 1)[0] || null;
+  if (w) return { code: w.code, ids: w.ids, city: w.metro ? w.city : (w.city || w.name).replace(/\s*\(.*\)$/, '') };
   const known = code ? AIRPORTS.find((a) => a[1] === code) : AIRPORTS.find((a) => a[0].toLowerCase().startsWith(raw.toLowerCase()));
   if (!code && !known) return null;
   const label = raw.replace(/\s*\([^)]*\)\s*$/, '').trim();
-  return { code: code || known[1], city: known ? (known[2] || known[0]) : label || code };
+  return { code: code || known[1], ids: code || known[1], city: known ? (known[2] || known[0]) : label || code };
 }
+// True when two parsed airports share any airport (e.g. London all airports and LHR).
+export const sameAirports = (a, b) => (a.ids || a.code).split(',').some((c) => (b.ids || b.code).split(',').includes(c));
 
 export async function fetchLive(body) {
   // text/plain keeps this a "simple" request, so phones skip the CORS preflight round trip.
@@ -345,9 +353,9 @@ export function openLiveSearch(prefill = {}) {
     <p>Real fares from Google Flights and hotel rates from Google Hotels, for your exact dates.</p>
     <form id="liveSearchForm" class="live-form" novalidate>
       <div class="live-airports">
-        <label><span>Flying from</span><input class="field-input" name="from" list="liveAirports" value="${esc(prefill.from || airportLabel(r.from))}" placeholder="Karachi (KHI)" autocomplete="off" required/></label>
+        <label><span>Flying from</span><input class="field-input" name="from" value="${esc(prefill.from || airportLabel(r.from))}" placeholder="Karachi (KHI)" autocomplete="off" required/></label>
         <button type="button" class="live-swap" data-action="live-swap" aria-label="Swap airports">${ic('swap')}</button>
-        <label><span>Flying to</span><input class="field-input" name="to" list="liveAirports" value="${esc(prefill.to || airportLabel(r.to))}" placeholder="Jeddah (JED)" autocomplete="off" required/></label>
+        <label><span>Flying to</span><input class="field-input" name="to" value="${esc(prefill.to || airportLabel(r.to))}" placeholder="Jeddah (JED)" autocomplete="off" required/></label>
       </div>
       <div class="live-when">
         <label><span>Departure</span><input class="field-input" type="date" name="depart" min="${isoAdd(0)}" max="${isoAdd(330)}" value="${depart}" required/></label>
@@ -357,11 +365,13 @@ export function openLiveSearch(prefill = {}) {
       <button class="dark-button live-submit" type="submit">Show the cheapest prices ${ic('arrowRight')}</button>
       <p class="form-error" id="liveSearchError" role="alert"></p>
     </form>
-    <datalist id="liveAirports">${AIRPORTS.map((a) => `<option value="${esc(a[0])} (${a[1]})"></option>`).join('')}</datalist>
     <div id="liveSearchResults" class="live-grid live-grid-modal" aria-live="polite"></div>
     <p class="small-print">Prices are what Google shows right now for your market (${cur}). A Uniworld advisor confirms availability and the final price before anything is booked.</p>
   </div>`);
   const form = document.getElementById('liveSearchForm');
+  attachAirportPicker(form.elements.from);
+  attachAirportPicker(form.elements.to);
+  loadWorld();
   form.elements.depart.addEventListener('change', () => { form.elements.return.min = form.elements.depart.value; });
   form.addEventListener('submit', submitLiveSearch);
 }
@@ -370,10 +380,11 @@ async function submitLiveSearch(e) {
   e.preventDefault();
   const form = e.currentTarget, error = document.getElementById('liveSearchError'), out = document.getElementById('liveSearchResults');
   const f = Object.fromEntries(new FormData(form));
+  await loadWorld();
   const a = parseAirport(f.from), b = parseAirport(f.to);
   error.textContent = '';
   if (!a || !b) { error.textContent = 'Pick airports from the list, or type a 3-letter code like KHI.'; return; }
-  if (a.code === b.code) { error.textContent = 'Choose two different airports.'; return; }
+  if (sameAirports(a, b)) { error.textContent = 'Choose two different airports.'; return; }
   if (!f.depart || f.depart < isoAdd(0)) { error.textContent = 'Choose a departure date from today onward.'; return; }
   if (f.return && f.return < f.depart) { error.textContent = 'Your return date is before departure.'; return; }
   const button = form.querySelector('.live-submit');
@@ -382,7 +393,7 @@ async function submitLiveSearch(e) {
   out.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const slow = setTimeout(() => { const w = out.querySelector('.live-wait'); if (w) w.textContent = 'Comparing hundreds of fares and hotels. This can take a few seconds…'; }, 6000);
   try {
-    const data = await fetchLive({ kind: 'search', from: a.code, to: b.code, depart: f.depart, return: f.return || undefined, adults: Number(f.adults) || 1, currency: currency(), city: b.city });
+    const data = await fetchLive({ kind: 'search', from: a.ids || a.code, to: b.ids || b.code, depart: f.depart, return: f.return || undefined, adults: Number(f.adults) || 1, currency: currency(), city: b.city });
     if (!out.isConnected) return;
     renderResults(out, data);
   } catch (err) {
@@ -399,11 +410,11 @@ async function submitLiveSearch(e) {
 export async function liveFlightBanner(el, search) {
   if (!el) return;
   const a = parseAirport(search.from), b = parseAirport(search.to);
-  if (!a || !b || a.code === b.code) { el.remove(); return; }
+  if (!a || !b || sameAirports(a, b)) { el.remove(); return; }
   el.innerHTML = `<div class="live-banner is-loading"><i class="live-dot" aria-hidden="true"></i><span>Checking the real lowest fare on Google Flights…</span></div>`;
   try {
     const cur = currency();
-    const data = await fetchLive({ kind: 'search', from: a.code, to: b.code, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, currency: cur, parts: ['flight'] });
+    const data = await fetchLive({ kind: 'search', from: a.ids || a.code, to: b.ids || b.code, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, currency: cur, parts: ['flight'] });
     if (!el.isConnected) return;
     const f = data.flight;
     if (!f) {

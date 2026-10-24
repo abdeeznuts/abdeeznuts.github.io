@@ -95,3 +95,59 @@
   .req-reach label{flex:1;justify-content:center}
 }
 @media(prefers-reduced-motion:reduce){.staff-card,.req-message{transition:none}}
+
+/* Payments, travel documents, Find my booking */
+.req-status.pay-due{background:#fde8dc;color:#a4461d;margin-left:6px}
+.req-status.paid{background:#e1efe3;color:#2f6b45;margin-left:6px}
+.req-keep{font-size:11px!important;color:#557462!important;margin-top:-6px!important}
+.req-pay{text-align:left;border-radius:14px;padding:16px 18px;margin:16px 0 4px;display:grid;gap:10px}
+.req-pay.due{background:#fff7ef;border:1px solid #f1d2bb}
+.req-pay.paid{background:#eef6ef;border:1px solid #cfe3d3}
+.req-pay .eyebrow{font-size:8px;margin:0;color:#a4461d}
+.req-pay.paid .eyebrow{color:#2f6b45}
+.req-pay strong{font-size:24px;letter-spacing:-.4px}
+.req-pay p{margin:0!important;font-size:12px!important;line-height:1.6!important}
+.req-pay-now{width:100%;justify-content:center}
+.req-pay-host{font-size:10px;color:#8c7a6a;text-align:center;margin-top:-4px}
+.req-pay-note{background:#fff;border-radius:10px;padding:10px 12px;border:1px solid #eedfd2}
+.req-pay-note b{font-size:11px}
+.req-pay-note p{white-space:pre-line;margin-top:4px!important;color:var(--ink)!important}
+.req-pay-sent{display:flex;gap:6px;align-items:center;color:#2f6b45!important;font-weight:600}
+.req-pay-sent .icon{width:14px;height:14px;flex-shrink:0}
+.req-paid-form{display:grid;gap:8px}
+.req-paid-form label{display:grid;gap:6px;font-size:11px;font-weight:600}
+.req-paid-form label small{font-weight:400;color:#8c9680}
+.req-docs{text-align:left;background:#fff;border:1px solid #dfe6dc;border-radius:14px;padding:14px 16px;margin:14px 0 4px}
+.req-docs .eyebrow{font-size:8px;color:#557462}
+.req-docs ul{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.req-docs a{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;padding:9px 10px;border-radius:9px;background:#f4f7f2}
+.req-docs a .icon{width:15px;height:15px;flex-shrink:0}
+.req-breakdown{list-style:none;margin:8px 0;padding:0;display:grid;gap:6px;text-align:left}
+.req-breakdown li{display:flex;justify-content:space-between;gap:10px;font-size:11px;line-height:1.5;border-bottom:1px dashed #e2e6dc;padding-bottom:6px}
+.req-breakdown li span{min-width:0;overflow-wrap:anywhere}
+.req-breakdown li span b{display:block;font-size:9px;letter-spacing:.8px;text-transform:uppercase;color:#6f8573}
+.req-breakdown li>b{white-space:nowrap;font-size:12px}
+.req-find h2{font-size:26px;margin:6px 0}
+.req-find>p{font-size:12px;color:#6f8573;line-height:1.6}
+.req-find form{margin-top:14px}
+.sync-status .text-button{margin-left:8px}
+.saved-hotel-card{grid-template-columns:150px 1fr auto}
+.saved-hotel-card>img,.saved-hotel-card>.flight-tile{width:100%;height:100%;min-height:130px;object-fit:cover}
+/* Team inbox: payments and settings */
+.staff-pay{border:1px solid var(--line);border-radius:12px;padding:12px;margin:0;display:grid;gap:10px}
+.staff-pay legend{font-size:11px;font-weight:700;padding:0 6px}
+.staff-pay-row{display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:10px}
+.staff-paystate b{color:var(--ink)}
+.staff-alert{display:flex;gap:6px;align-items:flex-start;font-size:11px;font-weight:600;color:#2f6b45;background:#eef6ef;border-radius:10px;padding:9px 11px;margin:8px 0}
+.staff-alert .icon{width:14px;height:14px;flex-shrink:0;margin-top:1px}
+.staff-settings{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:16px}
+.staff-settings summary{cursor:pointer;font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px}
+.staff-settings summary .icon{width:15px;height:15px}
+.staff-settings form{display:grid;gap:12px;margin-top:12px}
+.staff-settings label{display:grid;gap:6px;font-size:11px;font-weight:600}
+.staff-settings label small{font-weight:400;color:#8c9680}
+@media(max-width:620px){
+  .saved-hotel-card{grid-template-columns:88px 1fr}
+  .saved-hotel-card .plan-card-actions{grid-column:1/-1;display:flex;gap:10px;justify-content:space-between}
+  .staff-list{grid-template-columns:minmax(0,1fr)}
+}
