@@ -632,6 +632,139 @@ async function instantHotels(input: Record<string, unknown>, origin: string | nu
   }
 }
 
+// ---------- Instant flights (Duffel): fares the app can book and ticket itself ----------
+// Off until the DUFFEL_ACCESS_TOKEN secret exists. Prices include Uniworld's markup
+// (UNIWORLD_FLIGHT_MARKUP_PERCENT, default 0) and are in the airline's currency.
+const DUFFEL = 'https://api.duffel.com';
+const duffelHeaders = (token: string) => ({ Authorization: `Bearer ${token}`, 'Duffel-Version': 'v2', Accept: 'application/json', 'Content-Type': 'application/json' });
+const isoMinutes = (d: unknown) => { const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/.exec(String(d ?? '')); return m && (m[1] || m[2] || m[3]) ? Number(m[1] || 0) * 1440 + Number(m[2] || 0) * 60 + Number(m[3] || 0) : null; };
+const flightMarkup = () => { const n = Number(Deno.env.get('UNIWORLD_FLIGHT_MARKUP_PERCENT') ?? 0); return Number.isFinite(n) && n >= 0 && n <= 30 ? n : 0; };
+const minutesBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 60000);
+function duffelSlice(sl: any) {
+  const segs = Array.isArray(sl?.segments) ? sl.segments : [];
+  if (!segs.length) return null;
+  const first = segs[0], last = segs[segs.length - 1];
+  return {
+    depart: { id: first.origin?.iata_code ?? null, time: first.departing_at ?? null },
+    arrive: { id: last.destination?.iata_code ?? null, time: last.arriving_at ?? null },
+    stops: segs.length - 1,
+    durationMin: isoMinutes(sl.duration),
+    legs: segs.map((g: any) => ({
+      from: { id: g.origin?.iata_code ?? null, time: g.departing_at ?? null }, to: { id: g.destination?.iata_code ?? null, time: g.arriving_at ?? null },
+      airline: g.marketing_carrier?.name ?? null, flightNumber: g.marketing_carrier?.iata_code && g.marketing_carrier_flight_number ? `${g.marketing_carrier.iata_code} ${g.marketing_carrier_flight_number}` : null,
+      airplane: g.aircraft?.name ?? null, durationMin: isoMinutes(g.duration),
+    })),
+    layovers: segs.slice(0, -1).map((g: any, i: number) => ({ id: g.destination?.iata_code ?? null, name: g.destination?.name ?? null, durationMin: g.arriving_at && segs[i + 1]?.departing_at ? minutesBetween(g.arriving_at, segs[i + 1].departing_at) : null })),
+  };
+}
+function duffelOption(o: any, markup: number) {
+  const amount = Number(o?.total_amount), out = duffelSlice(o?.slices?.[0]);
+  if (!(amount > 0) || !out || typeof o.id !== 'string') return null;
+  const back = o.slices?.[1] ? duffelSlice(o.slices[1]) : null;
+  return {
+    offerId: o.id, instant: true, best: false,
+    price: Math.ceil(amount * (1 + markup / 100)), currency: String(o.total_currency || ''),
+    airlines: [o.owner?.name].filter(Boolean), logo: safeLink(o.owner?.logo_symbol_url),
+    ...out, back,
+    refundable: !!o.conditions?.refund_before_departure?.allowed, changeable: !!o.conditions?.change_before_departure?.allowed,
+    docsRequired: !!o.passenger_identity_documents_required, expiresAt: o.expires_at ?? null,
+    passengers: (Array.isArray(o.passengers) ? o.passengers : []).map((p: any) => ({ id: p.id, type: p.type ?? 'adult' })),
+  };
+}
+async function instantFlights(input: Record<string, unknown>, origin: string | null) {
+  const token = Deno.env.get('DUFFEL_ACCESS_TOKEN') ?? '';
+  if (!token) return reply({ ok: false, kind: 'instant-flights', notice: 'off', data: null }, 200, origin);
+  let f;
+  try { f = parseFlights(input); } catch (e) {
+    return reply({ ok: false, reason: 'invalid', message: e instanceof Invalid ? e.message : 'Invalid request.' }, 400, origin);
+  }
+  const cabin = { '1': 'economy', '2': 'premium_economy', '3': 'business', '4': 'first' }[f.cabin] ?? 'economy';
+  const slices = f.from.split(',').slice(0, 1).flatMap((from) => f.to.split(',').slice(0, 1).map((to) => [from, to]))[0];
+  const body = { data: {
+    slices: [{ origin: slices[0], destination: slices[1], departure_date: f.depart }, ...(f.ret ? [{ origin: slices[1], destination: slices[0], departure_date: f.ret }] : [])],
+    passengers: Array.from({ length: f.adults }, () => ({ type: 'adult' })), cabin_class: cabin, max_connections: 1,
+  } };
+  try {
+    const res = await fetch(`${DUFFEL}/air/offer_requests?return_offers=true&supplier_timeout=15000`, { method: 'POST', headers: duffelHeaders(token), body: JSON.stringify(body), signal: AbortSignal.timeout(28000) });
+    const json: any = await res.json().catch(() => null);
+    if (!res.ok || !json?.data) {
+      console.error('duffel search', res.status, JSON.stringify(json?.errors ?? '').slice(0, 200));
+      return reply({ ok: false, kind: 'instant-flights', notice: res.status === 401 || res.status === 403 ? 'setup' : 'unavailable', data: null }, 200, origin);
+    }
+    const markup = flightMarkup();
+    const options = (Array.isArray(json.data.offers) ? json.data.offers : []).map((o: any) => duffelOption(o, markup)).filter(Boolean)
+      .sort((a: any, b: any) => a.price - b.price).slice(0, 40);
+    return reply({ ok: options.length > 0, kind: 'instant-flights', currency: options[0]?.currency ?? null, sandbox: token.startsWith('duffel_test'),
+      search: { from: f.from, to: f.to, depart: f.depart, return: f.ret, adults: f.adults, cabin },
+      data: options.length ? { options, passengers: (json.data.passengers ?? []).map((p: any) => ({ id: p.id, type: p.type })) } : null,
+      notice: options.length ? null : 'empty', fetchedAt: new Date().toISOString() }, 200, origin);
+  } catch (e) {
+    console.error('duffel search', String((e as Error)?.message ?? e).slice(0, 200));
+    return reply({ ok: false, kind: 'instant-flights', notice: 'unavailable', data: null }, 200, origin);
+  }
+}
+
+// ---------- Cheaper-flight tricks ----------
+// Hidden city ("skiplagging"): a one-way ticket to a city past the destination that changes planes
+// at the destination; the traveler gets off there. The app searches several "beyond" cities in one
+// Google Flights search and keeps the itineraries that stop at the destination.
+// Split tickets: two separate one-way tickets through a hub, with at least 3 hours to connect.
+const localMinutes = (t: unknown) => { const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(t ?? '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 60000 : null; };
+function hiddenCityDeals(list: any, targets: string[]) {
+  return (list?.options ?? []).map((o: any) => {
+    const stop = o.legs.findIndex((l: any) => targets.includes(l.to?.id));
+    if (stop < 0 || stop === o.legs.length - 1 || targets.includes(o.arrive?.id)) return null;
+    return { ...o, getOff: { index: stop, at: o.legs[stop].to?.id, time: o.legs[stop].to?.time ?? null }, finalStop: o.arrive?.id ?? null };
+  }).filter(Boolean).sort((a: any, b: any) => a.price - b.price).slice(0, 10);
+}
+function splitTickets(first: any, second: any, minGap: number, maxGap: number) {
+  const out: any[] = [];
+  for (const a of first?.options ?? []) for (const b of second?.options ?? []) {
+    if (a.arrive?.id !== b.depart?.id) continue;
+    const t1 = localMinutes(a.arrive?.time), t2 = localMinutes(b.depart?.time);
+    if (t1 === null || t2 === null) continue;
+    const gap = t2 - t1;
+    if (gap < minGap || gap > maxGap) continue;
+    out.push({ total: a.price + b.price, hub: a.arrive.id, connectMin: gap, first: a, second: b });
+  }
+  out.sort((x, y) => x.total - y.total);
+  const seen = new Set<string>();
+  return out.filter((c) => { const k = c.hub + '|' + c.first.legs.map((l: any) => l.flightNumber).join() + '|' + c.second.legs.map((l: any) => l.flightNumber).join(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
+}
+async function flightHacks(kind: string, input: Record<string, unknown>, db: any, apiKey: string, origin: string | null) {
+  try {
+    const run = async (f: any) => {
+      const key = 'fl|' + JSON.stringify([f.from, f.to, f.depart, null, f.adults, f.cabin, f.currency]);
+      return cachedSearch(db, apiKey, key, TTL_HOURS.list, async () => flightList(await serp({
+        engine: 'google_flights', departure_id: f.from, arrival_id: f.to, outbound_date: f.depart, type: '2',
+        adults: String(f.adults), travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en',
+      }, apiKey), f));
+    };
+    if (kind === 'hidden-city') {
+      const f = parseFlights({ ...input, return: undefined });
+      const targets = airportCodes(input.target);
+      if (!targets) throw new Invalid('Choose your destination airport.');
+      if (f.to.split(',').some((c) => targets.includes(c))) throw new Invalid('Choose cities past your destination.');
+      const r = await run(f);
+      const deals = r.payload ? hiddenCityDeals(r.payload, targets) : [];
+      return reply({ ok: deals.length > 0, kind, currency: f.currency, search: { from: f.from, target: targets.join(','), beyond: f.to, depart: f.depart, adults: f.adults }, data: r.payload ? { deals, link: r.payload.link } : null, fetchedAt: r.fetchedAt, stale: r.stale, notice: r.payload ? (deals.length ? null : 'empty') : r.notice }, 200, origin);
+    }
+    const hubs = airportCodes(input.hubs);
+    if (!hubs) throw new Invalid('Choose stopover airports.');
+    const f1 = parseFlights({ ...input, to: hubs.join(','), return: undefined });
+    const f2 = parseFlights({ ...input, from: hubs.join(','), return: undefined });
+    const [r1, r2] = await Promise.all([run(f1), run(f2)]);
+    const minGap = Math.max(Number(input.minConnect) || 180, 120), maxGap = Math.min(Number(input.maxConnect) || 720, 1440);
+    const combos = r1.payload && r2.payload ? splitTickets(r1.payload, r2.payload, minGap, maxGap) : [];
+    const notice = r1.payload && r2.payload ? (combos.length ? null : 'empty') : (r1.notice || r2.notice || 'unavailable');
+    return reply({ ok: combos.length > 0, kind, currency: f1.currency, search: { from: f1.from, to: f2.to, hubs: hubs.join(','), depart: f1.depart, adults: f1.adults, minConnect: minGap }, data: combos.length ? { combos, links: [r1.payload?.link, r2.payload?.link] } : null, fetchedAt: r1.fetchedAt || r2.fetchedAt, notice }, 200, origin);
+  } catch (e) {
+    if (e instanceof Invalid) return reply({ ok: false, reason: 'invalid', message: e.message }, 400, origin);
+    console.error('hacks', kind, String((e as Error)?.message ?? e).slice(0, 200));
+    return reply({ ok: false, kind, notice: 'unavailable', data: null }, 200, origin);
+  }
+}
+
 // ---------- Shared cache + monthly cap for one SerpApi search ----------
 async function cachedSearch(db: any, apiKey: string, key: string, ttlHours: number, run: () => Promise<any>) {
   const { data: row } = await db.from('uniworld_rate_cache').select('payload,fetched_at,expires_at').eq('key', key).maybeSingle();
@@ -692,7 +825,7 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.2';
+const BUILD = '2026-10-24.3';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -720,10 +853,12 @@ Deno.serve(async (req) => {
   if (input.ping) {
     const month = new Date().toISOString().slice(0, 7);
     const { data } = await db.from('uniworld_serpapi_usage').select('calls').eq('month', month).maybeSingle();
-    return reply({ ok: true, build: BUILD, source: await sourceHash(), configured: !!apiKey, instant: { hotels: !!Deno.env.get('LITEAPI_KEY') }, usage: { month, calls: data?.calls ?? 0, cap: MONTHLY_CAP }, ttlHours: TTL_HOURS }, 200, origin);
+    return reply({ ok: true, build: BUILD, source: await sourceHash(), configured: !!apiKey, instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: !!Deno.env.get('DUFFEL_ACCESS_TOKEN') && !!Deno.env.get('STRIPE_SECRET_KEY') }, usage: { month, calls: data?.calls ?? 0, cap: MONTHLY_CAP }, ttlHours: TTL_HOURS }, 200, origin);
   }
 
   if (input.kind === 'instant-hotels') return instantHotels(input, origin);
+  if (input.kind === 'instant-flights') return instantFlights(input, origin);
+  if (input.kind === 'hidden-city' || input.kind === 'split-ticket') return flightHacks(String(input.kind), input, db, apiKey, origin);
   if (input.kind === 'hotels' || input.kind === 'hotel' || input.kind === 'flights') return listingReply(String(input.kind), input, db, apiKey, origin);
 
   let t: Trip;

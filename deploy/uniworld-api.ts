@@ -369,6 +369,205 @@ function holderFrom(v: any) {
   return { firstName, lastName, email, phone };
 }
 
+// ---------- Instant flight booking (Duffel + Stripe): the app tickets the flight after card payment ----------
+// Off until DUFFEL_ACCESS_TOKEN and STRIPE_SECRET_KEY exist. The customer pays on Stripe's checkout page;
+// the app then buys the ticket from the Duffel balance. If ticketing fails, the payment is refunded in
+// full automatically and the team is alerted.
+const DUFFEL_API = 'https://api.duffel.com';
+const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK', 'UGX', 'XAF', 'XOF']);
+async function duffel(path: string, payload?: unknown) {
+  const token = Deno.env.get('DUFFEL_ACCESS_TOKEN');
+  if (!token) throw new HttpError('Instant flight booking isn’t switched on yet. Send a request instead.', 503);
+  let res: Response;
+  try {
+    res = await fetch(DUFFEL_API + path, { method: payload === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Duffel-Version': 'v2', Accept: 'application/json', 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload), signal: AbortSignal.timeout(60000) });
+  } catch (e) { return { ok: false, status: 0, json: null as any, error: 'no answer: ' + String((e as Error)?.name ?? e).slice(0, 60) }; }
+  const json: any = await res.json().catch(() => null);
+  return { ok: res.ok && !!json?.data, status: res.status, json, error: String(json?.errors?.[0]?.message ?? json?.errors?.[0]?.title ?? '').slice(0, 200) };
+}
+async function stripe(path: string, params?: Record<string, string>, idempotencyKey?: string) {
+  const key = Deno.env.get('STRIPE_SECRET_KEY');
+  if (!key) throw new HttpError('Card payments aren’t switched on yet. Send a request instead.', 503);
+  const headers: Record<string, string> = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/x-www-form-urlencoded' };
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+  let res: Response;
+  try {
+    res = await fetch('https://api.stripe.com/v1' + path, { method: params ? 'POST' : 'GET', headers, body: params ? new URLSearchParams(params).toString() : undefined, signal: AbortSignal.timeout(30000) });
+  } catch (e) { return { ok: false, status: 0, json: null as any, error: 'no answer: ' + String((e as Error)?.name ?? e).slice(0, 60) }; }
+  const json: any = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, json, error: String(json?.error?.message ?? '').slice(0, 200) };
+}
+const flightMarkupPct = () => { const n = Number(Deno.env.get('UNIWORLD_FLIGHT_MARKUP_PERCENT') ?? 0); return Number.isFinite(n) && n >= 0 && n <= 30 ? n : 0; };
+// Test keys and live keys must never be mixed: a test Stripe payment must not buy a real ticket,
+// and a real card payment must not buy a test ticket.
+function flightModes() {
+  const d = Deno.env.get('DUFFEL_ACCESS_TOKEN') ?? '', s = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
+  const duffelTest = d.startsWith('duffel_test_'), stripeTest = /^(sk|rk)_test_/.test(s);
+  const known = (duffelTest || d.startsWith('duffel_live_')) && (stripeTest || /^(sk|rk)_live_/.test(s));
+  return { on: !!d && !!s && known && duffelTest === stripeTest, sandbox: duffelTest };
+}
+const minorUnits = (amount: number, currency: string) => (ZERO_DECIMAL.has(currency) ? Math.round(amount) : Math.round(amount * 100));
+// E.164 phone for the airline: +923001234567
+function e164(phone: string, market: string) {
+  const raw = String(phone || '').trim();
+  let digits = raw.replace(/\D/g, '');
+  if (!raw.startsWith('+')) {
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    else if (market === 'PKR' && /^03\d{9}$/.test(digits)) digits = '92' + digits.slice(1);
+    else if (market === 'GBP' && /^07\d{9}$/.test(digits)) digits = '44' + digits.slice(1);
+    else if (market === 'USD' && /^\d{10}$/.test(digits)) digits = '1' + digits;
+  }
+  return digits.length >= 8 && digits.length <= 15 ? '+' + digits : '';
+}
+function flightPassengers(list: any, offer: any) {
+  const ids = (offer.passengers ?? []).map((p: any) => p.id);
+  if (!Array.isArray(list) || list.length !== ids.length) throw new HttpError('Please add every traveler’s details.');
+  const today = new Date().toISOString().slice(0, 10);
+  // Every fare here is searched as adults; Duffel needs anyone under 18 sent with their age instead.
+  const departs = String(offer.slices?.[0]?.segments?.[0]?.departing_at ?? today).slice(0, 10);
+  const adultBornBy = `${Number(departs.slice(0, 4)) - 18}${departs.slice(4)}`;
+  return list.map((p: any, i: number) => {
+    const given = safe(p?.givenName, 60), family = safe(p?.familyName, 60), born = safe(p?.bornOn, 10);
+    if (!given || !family) throw new HttpError(`Enter traveler ${i + 1}’s names exactly as on the passport.`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(born) || born >= today || born < '1900-01-01') throw new HttpError(`Enter traveler ${i + 1}’s date of birth.`);
+    if (born > adultBornBy) throw new HttpError(`Instant booking is for travelers aged 18 and over. For traveler ${i + 1}, send a request instead and an advisor will book the right child fare.`);
+    const title = ['mr', 'ms', 'mrs', 'miss', 'dr'].includes(p?.title) ? p.title : null, gender = ['m', 'f'].includes(p?.gender) ? p.gender : null;
+    if (!title || !gender) throw new HttpError(`Choose traveler ${i + 1}’s title and gender as on the passport.`);
+    const out: any = { id: ids[i], given_name: given, family_name: family, born_on: born, title, gender };
+    if (offer.passenger_identity_documents_required || p?.passport?.number) {
+      const number = safe(p?.passport?.number, 20).replace(/\s+/g, '').toUpperCase(), country = safe(p?.passport?.country, 2).toUpperCase(), expires = safe(p?.passport?.expires, 10);
+      if (!/^[A-Z0-9]{5,20}$/.test(number) || !/^[A-Z]{2}$/.test(country) || !/^\d{4}-\d{2}-\d{2}$/.test(expires) || expires <= today) throw new HttpError(`Enter traveler ${i + 1}’s passport number, issuing country and expiry date.`);
+      out.identity_documents = [{ unique_identifier: number, issuing_country_code: country, expires_on: expires, type: 'passport' }];
+    }
+    return out;
+  });
+}
+// Stripe calls the app when a payment completes, even if the customer closed the page.
+async function stripeWebhookSecret(records: () => any) {
+  const fixed = Deno.env.get('STRIPE_WEBHOOK_SECRET');
+  if (fixed) return fixed;
+  const key = Deno.env.get('STRIPE_SECRET_KEY') ?? '', mode = key.includes('_live_') ? 'live' : 'test';
+  const saved = await records().select('body').eq('id', 'system:stripe-webhook:' + mode).maybeSingle();
+  if (saved.data?.body?.secret) return saved.data.body.secret;
+  const url = `${Deno.env.get('SUPABASE_URL')}/functions/v1/uniworld-api/instant/stripe-webhook`;
+  const r = await stripe('/webhook_endpoints', { url, 'enabled_events[0]': 'checkout.session.completed', description: 'Uniworld app: finish flight bookings after payment' }, 'uniworld-webhook-' + mode);
+  if (!r.ok || !r.json?.secret) { console.error('stripe webhook setup', r.status, r.error); return null; }
+  await records().upsert({ id: 'system:stripe-webhook:' + mode, owner: 'system', kind: 'config', body: { id: r.json.id, secret: r.json.secret, url, created: Date.now() }, created: Date.now() }, { onConflict: 'id' });
+  return r.json.secret;
+}
+async function stripeSignatureOk(raw: string, header: string, secret: string) {
+  const parts = Object.fromEntries(header.split(',').map((x) => x.split('=').map((y) => y.trim())).filter((x) => x.length === 2).map(([k, v]) => [k, v])) as any;
+  const sigs = header.split(',').filter((x) => x.trim().startsWith('v1=')).map((x) => x.trim().slice(3));
+  const t = Number(parts.t);
+  if (!t || !sigs.length || Math.abs(Date.now() / 1000 - t) > 300) return false;
+  const k = await crypto.subtle.importKey('raw', te.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', k, te.encode(`${t}.${raw}`))), (b) => b.toString(16).padStart(2, '0')).join('');
+  return sigs.some((s: string) => s.length === mac.length && [...s].reduce((d, c, i) => d | (c.charCodeAt(0) ^ mac.charCodeAt(i)), 0) === 0);
+}
+// Buys the ticket once Stripe says the customer paid. Safe to call more than once, and from the
+// customer's phone and Stripe's webhook at the same moment: a lock row lets only one of them buy.
+const LOCK_STALE_MS = 3 * 60000;
+async function completeFlight(records: () => any, owner: string, requestId: string) {
+  const holdKey = owner + ':flight:' + requestId, key = owner + ':request:' + requestId, lockId = holdKey + ':lock';
+  const doneRecord = async () => { const done = await records().select('body').eq('id', key).maybeSingle(); return done.data ? { record: done.data.body, status: 200 } : null; };
+  const held = await records().select('body').eq('id', holdKey).eq('owner', owner).maybeSingle();
+  if (!held.data) throw new HttpError('This booking has expired. Please choose the flight again.', 404);
+  let hold = held.data.body;
+  if (hold.done) { const r = await doneRecord(); if (r) return r; }
+  const session = await stripe('/checkout/sessions/' + encodeURIComponent(hold.sessionId));
+  if (!session.ok) throw new HttpError('We couldn’t check your payment just now. Please wait a moment.', 503);
+  if (session.json.payment_status !== 'paid') throw new HttpError('Your payment isn’t complete yet. If you paid, please wait a moment and refresh.', 402);
+  const lockedAt = Date.now();
+  const got = await records().insert({ id: lockId, owner, kind: 'lock', body: { at: lockedAt }, created: lockedAt });
+  let takeover = false;
+  if (got.error) {
+    if (got.error.code !== '23505') throw got.error;
+    const again = await records().select('body').eq('id', holdKey).maybeSingle();
+    if (again.data?.body?.done) { const r = await doneRecord(); if (r) return r; }
+    const lock = await records().select('body').eq('id', lockId).maybeSingle();
+    const at = Number(lock.data?.body?.at) || 0;
+    if (Date.now() - at < LOCK_STALE_MS) return { record: null, status: 202 };
+    // The earlier attempt stopped part-way. Take over, unless someone else just did.
+    const moved = await records().update({ body: { at: lockedAt, takeover: true } }).eq('id', lockId).eq('body->>at', String(at)).select('id');
+    if (!moved.data?.length) return { record: null, status: 202 };
+    hold = again.data?.body ?? hold;
+    takeover = true;
+  }
+  hold = { ...hold, paymentIntent: session.json.payment_intent ?? null };
+  let order: any = null, problem = '', unsure = false;
+  if (takeover && hold.ordering) {
+    // The airline may already have issued a ticket on the attempt that stopped: never buy twice.
+    unsure = true;
+    problem = 'The app stopped while the airline was issuing the ticket';
+  } else {
+    // Fresh price check, then buy from the Duffel balance.
+    const fresh = await duffel('/air/offers/' + encodeURIComponent(hold.offerId));
+    const nowAmount = Number(fresh.json?.data?.total_amount), nowCurrency = fresh.json?.data?.total_currency;
+    if (!fresh.ok) problem = 'The airline withdrew this fare' + (fresh.error ? ` (${fresh.error})` : '');
+    else if (nowCurrency !== hold.currency || !(nowAmount > 0) || nowAmount > hold.charge) problem = `The fare went up to ${nowCurrency} ${nowAmount}`;
+    else {
+      hold = { ...hold, ordering: Date.now() };
+      await records().update({ body: hold }).eq('id', holdKey);
+      const r = await duffel('/air/orders', { data: { type: 'instant', selected_offers: [hold.offerId], payments: [{ type: 'balance', currency: nowCurrency, amount: fresh.json.data.total_amount }], passengers: hold.passengers.map((p: any) => ({ ...p, email: hold.contact.email, phone_number: hold.contact.phoneE164 })), metadata: { uniworld_request: requestId } } });
+      if (r.ok) order = r.json.data;
+      else if (r.status >= 500 || r.status === 0) { unsure = true; problem = 'The airline didn’t answer while issuing the ticket' + (r.error ? ` (${r.error})` : ''); }
+      else problem = 'Ticketing failed' + (r.error ? ` (${r.error})` : ` (HTTP ${r.status})`);
+    }
+  }
+  const now = Date.now(), t = hold.trip;
+  const record: any = {
+    id: await referenceFor(requestId), recordId: requestId, kind: 'flight', title: `${t.fromLabel} → ${t.toLabel}`, destination: t.toLabel, image: '',
+    start: t.depart, end: t.ret || t.depart, oneWay: !t.ret, from: t.fromLabel, to: t.toLabel, cabin: t.cabin, travelers: hold.passengers.length,
+    details: `${t.airline} · ${t.stops === 0 ? 'nonstop' : t.stops + ' stop' + (t.stops > 1 ? 's' : '')} · ${t.cabin}${t.ret ? ' · return' : ' · one way'}`,
+    chosen: t.chosen, estimateUsd: null, seen: null,
+    name: hold.contact.name, phone: hold.contact.phone, email: hold.contact.email, contactBy: 'whatsapp', note: hold.note || '', market: hold.market, created: now, updated: now,
+    staff: { note: '' },
+  };
+  if (order) {
+    const tickets = (Array.isArray(order.documents) ? order.documents : []).filter((x: any) => x.type === 'electronic_ticket').map((x: any) => String(x.unique_identifier));
+    Object.assign(record, {
+      status: 'confirmed', customerMessage: `Ticketed! Your airline booking reference is ${order.booking_reference}. Use it on the airline’s website or app to check in and see your seats.`,
+      payment: { status: 'paid', amount: hold.charge, currency: hold.currency, link: '', note: 'Paid by card in the app', dueAt: now, paidAt: now, customerSent: null },
+      instant: { provider: 'duffel', orderId: order.id, pnr: order.booking_reference, tickets, sandbox: !!t.sandbox, error: null },
+      history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'payment_paid', by: 'app' }, { at: now, status: 'confirmed', by: 'app' }],
+    });
+  } else if (unsure) {
+    // Paid, and the ticket may exist: a person checks Duffel before anything else happens.
+    console.error('flight booking unsure', problem);
+    const names = hold.passengers.map((p: any) => `${p.given_name} ${p.family_name}`).join(', ');
+    Object.assign(record, {
+      status: 'in_progress', customerMessage: 'Your payment went through and the airline is confirming your ticket. A Uniworld advisor will message you shortly with your booking reference. You don’t need to pay again.',
+      payment: { status: 'paid', amount: hold.charge, currency: hold.currency, link: '', note: 'Paid by card in the app', dueAt: now, paidAt: now, customerSent: null },
+      instant: { provider: 'duffel', orderId: null, pnr: null, tickets: [], sandbox: !!t.sandbox, error: problem, refunded: false, unsure: true },
+      history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'payment_paid', by: 'app' }, { at: now, status: 'in_progress', by: 'app' }],
+      staff: { note: `CHECK DUFFEL BEFORE ANYTHING ELSE: ${problem}. The customer paid ${hold.currency} ${hold.charge} by card. In the Duffel dashboard, open Orders and look for ${names} on ${t.depart}. If the order is there, send the customer its booking reference and mark this confirmed. If not, book the flight again or refund the card payment in Stripe (${hold.contact.email}).` },
+    });
+  } else {
+    const refund = hold.paymentIntent ? await stripe('/refunds', { payment_intent: String(hold.paymentIntent), reason: 'requested_by_customer', 'metadata[requestId]': requestId }, 'refund-' + requestId) : { ok: false, error: 'no payment' };
+    console.error('flight booking failed', problem, 'refund', refund.ok);
+    Object.assign(record, {
+      status: 'new', customerMessage: refund.ok
+        ? `We couldn’t issue this ticket (${problem.charAt(0).toLowerCase() + problem.slice(1)}), so your payment has been refunded in full. It shows on your card within 5–10 days. A Uniworld advisor will contact you with the best alternative.`
+        : `We couldn’t issue this ticket (${problem.charAt(0).toLowerCase() + problem.slice(1)}). A Uniworld advisor will contact you right away about your payment and the best alternative.`,
+      payment: { status: 'none' },
+      instant: { provider: 'duffel', orderId: null, pnr: null, tickets: [], sandbox: !!t.sandbox, error: problem, refunded: !!refund.ok },
+      history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'instant_failed', by: 'app' }],
+      staff: { note: `Instant flight failed: ${problem}. ${refund.ok ? 'Refunded automatically.' : 'REFUND FAILED: refund in Stripe manually (' + (refund.error || '') + ').'}` },
+    });
+  }
+  const { error } = await records().upsert({ id: key, owner, kind: 'request', body: record, created: now }, { onConflict: 'id' });
+  if (error) throw error;
+  // Passport details are only kept until the airline has them.
+  await records().update({ body: { ...hold, passengers: hold.passengers.map((p: any) => ({ id: p.id })), done: now } }).eq('id', holdKey);
+  await records().delete().eq('id', lockId);
+  inBackground(Promise.all([notifyTeam(record), pushTeam(records, order
+    ? { title: `Ticketed automatically · ${record.id}`, body: `${record.name} · ${record.title} · PNR ${order.booking_reference}`, url: '/#staff', tag: record.id }
+    : unsure
+      ? { title: `Check Duffel now · ${record.id}`, body: `${record.name} paid for ${record.title} but the ticket isn’t confirmed. Check Duffel before rebooking.`, url: '/#staff', tag: record.id }
+      : { title: `Needs help · ${record.id}`, body: `Flight ticketing failed for ${record.name} (${record.title}). ${record.instant.refunded ? 'Refunded.' : 'Refund needed!'}`, url: '/#staff', tag: record.id })]));
+  return { record, status: order ? 201 : 202 };
+}
+
 // ---------- Team settings (WhatsApp number, default payment instructions) ----------
 const SETTINGS_ID = 'system:settings';
 async function readSettings(records: () => any) {
@@ -568,7 +767,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.3';
+const BUILD = '2026-10-24.5';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -641,6 +840,17 @@ Deno.serve(async (req) => {
       throw new HttpError('Not found.', 404);
     }
 
+    // ----- Stripe: payment finished (server to server) -----
+    if (path[0] === 'instant' && path[1] === 'stripe-webhook' && method === 'POST') {
+      const raw = await req.text(), secret = await stripeWebhookSecret(records);
+      if (!secret || !(await stripeSignatureOk(raw, req.headers.get('stripe-signature') ?? '', secret))) throw new HttpError('Bad signature.', 400);
+      const event = JSON.parse(raw), obj = event?.data?.object ?? {};
+      if (event?.type === 'checkout.session.completed' && UUID.test(obj.metadata?.requestId ?? '') && /^device:[0-9a-f-]{36}$/.test(obj.metadata?.owner ?? '')) {
+        inBackground(completeFlight(records, obj.metadata.owner, obj.metadata.requestId).catch((e) => console.error('webhook complete', String(e).slice(0, 160))));
+      }
+      return json({ received: true }, 200, origin);
+    }
+
     // ----- Customer (private device id) -----
     const device = req.headers.get('x-uniworld-device') ?? '';
     if (!UUID.test(device)) throw new HttpError('Open Uniworld again to continue.', 401);
@@ -668,7 +878,7 @@ Deno.serve(async (req) => {
         favorites: (rows.find((r: any) => r.kind === 'favorites') as any)?.body ?? [],
         savedHotels: (rows.find((r: any) => r.kind === 'saved-hotels') as any)?.body ?? [],
         contact: { whatsapp: (await readSettings(records)).whatsapp },
-        instant: { hotels: !!Deno.env.get('LITEAPI_KEY') },
+        instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: flightModes().on },
         aiMode: 'on-device',
         displayName: 'This device',
       }, 200, origin);
@@ -697,6 +907,62 @@ Deno.serve(async (req) => {
       const result = saved.data?.body ?? record;
       if (!saved.data || saved.data.body.created === now) inBackground(Promise.all([notifyTeam(result), pushTeam(records, { title: `New ${result.kind === 'umrah' ? 'Umrah ' : ''}request · ${result.id}`, body: `${result.name} · ${result.title}`, url: '/#staff', tag: result.id })]));
       return json(forCustomer(result), 201, origin);
+    }
+    // ----- Instant flight booking (Duffel + Stripe) -----
+    if (path[0] === 'instant' && path[1] === 'flight' && path[2] === 'checkout' && method === 'POST') {
+      const input = await body(req);
+      if (!UUID.test(input.requestId || '')) throw new HttpError('Please start again.');
+      const modes = flightModes();
+      if (!modes.on) throw new HttpError('Instant flight booking isn’t switched on yet. Send a request instead.', 503);
+      const requestId = String(input.requestId).toLowerCase(), offerId = safe(input.offerId, 80);
+      if (!/^off_[A-Za-z0-9]{8,60}$/.test(offerId)) throw new HttpError('Choose a flight first.');
+      if (input.consent !== true) throw new HttpError('Please agree to be contacted about this booking.');
+      const contact = holderFrom({ firstName: 'x', lastName: 'x', email: input.contact?.email, phone: input.contact?.phone });
+      const market = MARKETS.includes(input.market) ? input.market : 'USD', phoneE164 = e164(contact.phone, market);
+      if (!phoneE164) throw new HttpError('Please enter a phone number with your country code, like +92 300 1234567.');
+      const earlier = await records().select('body').eq('id', owner + ':flight:' + requestId).maybeSingle();
+      if (earlier.data?.body?.done || earlier.data?.body?.ordering) throw new HttpError('This booking is already being finished. Check My trips.', 409);
+      const fresh = await duffel('/air/offers/' + encodeURIComponent(offerId));
+      if (!fresh.ok) throw new HttpError('This fare is no longer available. Please search again.', 409);
+      const offer = fresh.json.data;
+      if (Date.parse(offer.expires_at) - Date.now() < 3 * 60000) throw new HttpError('This fare is about to expire. Please search again.', 409);
+      const passengers = flightPassengers(input.passengers, offer);
+      const amount = Number(offer.total_amount), currency = String(offer.total_currency).toUpperCase();
+      const charge = Math.ceil(amount * (1 + flightMarkupPct() / 100) * 100) / 100;
+      const segs = offer.slices?.[0]?.segments ?? [], first = segs[0], last = segs[segs.length - 1];
+      const trip = {
+        fromLabel: safe(input.trip?.fromLabel, 80) || first?.origin?.iata_code, toLabel: safe(input.trip?.toLabel, 80) || last?.destination?.iata_code,
+        depart: String(first?.departing_at ?? '').slice(0, 10), ret: offer.slices?.[1] ? String(offer.slices[1].segments?.[0]?.departing_at ?? '').slice(0, 10) : '',
+        airline: String(offer.owner?.name ?? 'Airline'), stops: segs.length - 1, cabin: safe(input.trip?.cabin, 30) || 'Economy', sandbox: modes.sandbox,
+        chosen: segs.map((g: any) => `${g.marketing_carrier?.iata_code ?? ''} ${g.marketing_carrier_flight_number ?? ''} ${g.origin?.iata_code} ${String(g.departing_at ?? '').slice(11, 16)} → ${g.destination?.iata_code} ${String(g.arriving_at ?? '').slice(11, 16)}`).join(' · ').slice(0, 290),
+      };
+      await stripeWebhookSecret(records).catch(() => null);
+      const app = (Deno.env.get('UNIWORLD_APP_URL') || APP_URL).replace(/\/+$/, '');
+      const s = await stripe('/checkout/sessions', {
+        mode: 'payment', 'line_items[0][quantity]': '1',
+        'line_items[0][price_data][currency]': currency.toLowerCase(), 'line_items[0][price_data][unit_amount]': String(minorUnits(charge, currency)),
+        'line_items[0][price_data][product_data][name]': `Flight ${trip.fromLabel} → ${trip.toLabel}`.slice(0, 120),
+        'line_items[0][price_data][product_data][description]': `${trip.airline} · ${trip.depart}${trip.ret ? ' → ' + trip.ret : ' one way'} · ${passengers.length} traveler${passengers.length > 1 ? 's' : ''}`.slice(0, 200),
+        customer_email: contact.email, client_reference_id: requestId,
+        'metadata[requestId]': requestId, 'metadata[owner]': owner, 'payment_intent_data[metadata][requestId]': requestId,
+        success_url: `${app}/?flight=${requestId}#trips`, cancel_url: `${app}/#flights`,
+        expires_at: String(Math.floor(Date.now() / 1000) + 31 * 60),
+      }, 'checkout-' + requestId);
+      if (!s.ok || !s.json?.url) { console.error('stripe checkout', s.status, s.error); throw new HttpError('Card payment isn’t available right now. Please try again or send a request.', 503); }
+      const hold = { requestId, offerId, amount, currency, charge, passengers, contact: { name: safe(input.contact?.name, 100) || `${passengers[0].given_name} ${passengers[0].family_name}`, email: contact.email, phone: contact.phone, phoneE164 }, note: safe(input.note, 500), market, trip, sessionId: s.json.id, created: Date.now(), ordering: null, done: null };
+      const { error } = await records().upsert({ id: owner + ':flight:' + requestId, owner, kind: 'instant-flight', body: hold, created: hold.created }, { onConflict: 'id' });
+      if (error) throw error;
+      // Unpaid checkouts from earlier don't keep passport details.
+      const stale = await records().select('id,body').eq('owner', owner).eq('kind', 'instant-flight').limit(20);
+      for (const row of stale.data ?? []) if (!row.body.done && row.body.created < Date.now() - 6 * 3600000 && row.body.passengers?.some((x: any) => x.given_name)) await records().update({ body: { ...row.body, passengers: row.body.passengers.map((x: any) => ({ id: x.id })) } }).eq('id', row.id);
+      return json({ url: s.json.url, charge, currency, sandbox: trip.sandbox }, 200, origin);
+    }
+    if (path[0] === 'instant' && path[1] === 'flight' && path[2] === 'complete' && method === 'POST') {
+      const input = await body(req);
+      if (!UUID.test(input.requestId || '')) throw new HttpError('Please start again.');
+      const r = await completeFlight(records, owner, String(input.requestId).toLowerCase());
+      if (!r.record) return json({ pending: true }, 202, origin);
+      return json(forCustomer(r.record), r.status, origin);
     }
     // ----- Instant hotel booking (liteAPI) -----
     if (path[0] === 'instant' && path[1] === 'hotel' && path[2] === 'prebook' && method === 'POST') {
