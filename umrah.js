@@ -326,7 +326,7 @@ function flightCard(step) {
 
 function hotelCard(name, step) {
   const e = d.esc, ic = d.icon, p = u.parts[name], h = chosen(name), cur = p.currency, s = u.plan.stays[name], city = CITY[name];
-  const head = (title) => `<div class="um-part-head"><span class="um-step">${step}</span><div><span class="eyebrow">${city.name.toUpperCase()} · ${plural(s.nights, 'NIGHT')}</span><h4>${title}</h4></div>${h ? `<button class="text-button" data-um="change" data-part="${name}">Change</button>` : ''}</div>`;
+  const head = (title) => `<div class="um-part-head"><span class="um-step">${step}</span><div><span class="eyebrow">${city.name.toUpperCase()} · ${s.nights} NIGHT${s.nights === 1 ? '' : 'S'}</span><h4>${title}</h4></div>${h ? `<button class="text-button" data-um="change" data-part="${name}">Change</button>` : ''}</div>`;
   if (!h) return `<article class="um-part um-hotel">${head(`Hotels near ${e(city.mosque)}`)}${partNotice(p)}</article>`;
   const walk = walkMinutes(h, city.near), img = h.images?.[0]?.large || h.images?.[0]?.thumb, total = hotelTotal(h, s.nights);
   return `<article class="um-part um-hotel">

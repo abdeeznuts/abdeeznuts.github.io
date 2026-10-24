@@ -151,3 +151,6 @@
   .saved-hotel-card .plan-card-actions{grid-column:1/-1;display:flex;gap:10px;justify-content:space-between}
   .staff-list{grid-template-columns:minmax(0,1fr)}
 }
+.req-alerts-panel{width:100%;justify-content:center;margin:14px 0 2px}
+.req-alerts .icon{width:15px;height:15px}
+.staff-tools .icon{width:14px;height:14px}

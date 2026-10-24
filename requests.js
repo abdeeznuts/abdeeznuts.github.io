@@ -4,6 +4,7 @@
 // price, asks for payment (a payment link and/or bank details), marks it paid and shares
 // the travel documents. The customer follows every step in My trips.
 import { money as liveMoney } from './live-rates.js';
+import { alertsState, turnOnAlerts, turnOffAlerts, ALERT_HELP } from './push.js';
 
 // Uniworld contact details (from uniworldinc.com). The WhatsApp number is set by the team
 // in the team inbox (Settings) and arrives with the app's data; it can also be put here
@@ -101,6 +102,25 @@ function mergeRequest(r) {
   d.onChange?.();
 }
 
+// ---------- Booking alerts on this phone ----------
+export function alertsButton(cls = 'outline-button') {
+  const st = alertsState('customer');
+  if (st === 'on' || st === 'unsupported') return '';
+  return `<button class="${cls} req-alerts" data-action="alerts-on">${d.icon('phone')} Get alerts about my bookings</button>`;
+}
+async function customerAlerts(b) {
+  if (alertsState('customer') === 'install') {
+    d.openModal(`<div class="modal-body"><span class="eyebrow">BOOKING ALERTS</span><h2 id="modalTitle">Add Uniworld to your Home Screen.</h2><p>${d.esc(ALERT_HELP.install)}</p><button class="dark-button" data-action="install">Show me how ${d.icon('arrow-right')}</button></div>`, true);
+    return;
+  }
+  b.disabled = true;
+  try {
+    await turnOnAlerts(d.api, 'customer');
+    document.querySelectorAll('[data-action="alerts-on"]').forEach((x) => x.remove());
+    d.toast('Alerts are on. We’ll let you know when your booking is confirmed, ready to pay or your documents are ready.');
+  } catch (ex) { b.disabled = false; d.toast(ex.message); }
+}
+
 // ---------- Customer: request to book ----------
 export function openRequest(trip) {
   draft = { trip, requestId: crypto.randomUUID(), sending: false };
@@ -196,6 +216,7 @@ export function showRequest(r, fresh = false) {
     <p>${fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
     <div class="confirmation-code">${e(r.id)}</div>
     ${fresh ? '<p class="req-keep">Keep this reference. With it and your phone number you can find this booking on any phone.</p>' : ''}
+    ${r.status !== 'cancelled' ? alertsButton('outline-button req-alerts-panel') : ''}
     <span class="req-status ${e(r.status)}">${label}</span>${payState(r) === 'due' ? '<span class="req-status pay-due">Payment due</span>' : payState(r) === 'paid' ? '<span class="req-status paid">Paid</span>' : ''}
     ${r.customerMessage ? `<div class="req-message"><span class="eyebrow">MESSAGE FROM UNIWORLD</span><p>${e(r.customerMessage)}</p></div>` : ''}
     ${paymentBlock(r)}
@@ -287,6 +308,8 @@ async function onSubmitDoc(ev) {
 async function onClick(ev) {
   const find = ev.target.closest('[data-action="find-booking"]');
   if (find) { openFindBooking(); return; }
+  const alerts = ev.target.closest('[data-action="alerts-on"]');
+  if (alerts) { customerAlerts(alerts); return; }
   const b = ev.target.closest('[data-action^="req-"]');
   if (!b) return;
   const a = b.dataset.action, e = d.esc, r = d.state.requests.find((x) => x.recordId === b.dataset.id);
@@ -400,7 +423,7 @@ export function mountStaff(main) {
     document.title = `${fresh ? `(${fresh}) ` : ''}Team inbox — Uniworld`;
     main.innerHTML = `<section class="wrap staff-page">
       <div class="staff-head"><div><span class="eyebrow">UNIWORLD TEAM</span><h1>Requests</h1><p>${count('new')} new · ${count('in_progress')} in progress · ${count('due')} payment due · updated ${new Date(checkedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p></div>
-        <div class="staff-tools"><button class="outline-button compact" data-staff="refresh">Refresh</button><button class="text-button" data-staff="signout">Sign out</button></div></div>
+        <div class="staff-tools">${alertsState('staff') === 'on' ? `<button class="outline-button compact" data-staff="alerts">${ic('check')} Alerts on</button>` : alertsState('staff') === 'unsupported' ? '' : `<button class="dark-button compact" data-staff="alerts">${ic('phone')} Turn on alerts</button>`}<button class="outline-button compact" data-staff="refresh">Refresh</button><button class="text-button" data-staff="signout">Sign out</button></div></div>
       ${settingsView()}
       <div class="chip-row staff-filters">${FILTERS.map(([k, l]) => `<button class="chip ${filter === k ? 'active' : ''}" data-staff="filter" data-filter="${k}" aria-pressed="${filter === k}">${l} (${count(k)})</button>`).join('')}</div>
       <div class="staff-list">${shown.length ? shown.map(card).join('') : `<div class="no-results">${ic('compass')}<h3>Nothing here yet.</h3><p>New booking requests from the app show up here.</p></div>`}</div>
@@ -460,10 +483,22 @@ export function mountStaff(main) {
     } catch (ex) { note.textContent = ex.message; btn.disabled = false; }
   }
 
+  async function staffAlerts(b) {
+    const st = alertsState('staff');
+    if (st === 'install') { d.toast(ALERT_HELP.install); return; }
+    b.disabled = true;
+    try {
+      if (st === 'on') { await turnOffAlerts(d.api, 'staff', { 'x-uniworld-staff': getKey() }); d.toast('Alerts are off on this phone.'); }
+      else { await turnOnAlerts(d.api, 'staff', { 'x-uniworld-staff': getKey() }); d.toast('Alerts are on. This phone will buzz for every new request and payment.'); }
+      inboxView();
+    } catch (ex) { b.disabled = false; d.toast(ex.message); }
+  }
+
   function onClickStaff(ev) {
     const b = ev.target.closest('[data-staff]');
     if (!b) return;
-    if (b.dataset.staff === 'refresh') load();
+    if (b.dataset.staff === 'alerts') staffAlerts(b);
+    else if (b.dataset.staff === 'refresh') load();
     else if (b.dataset.staff === 'filter') { filter = b.dataset.filter; inboxView(); }
     else if (b.dataset.staff === 'signout') { setKey(''); setSeen(Date.now()); list = []; loginView('Signed out.'); }
   }
