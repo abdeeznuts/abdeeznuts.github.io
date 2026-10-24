@@ -555,6 +555,83 @@ function flightList(json: any, f: FlightSearch) {
   };
 }
 
+// ---------- Instant hotels (liteAPI): bookable rooms the app can book and charge itself ----------
+// Off until the LITEAPI_KEY secret exists. Prices include the markup set in the liteAPI dashboard.
+const LITEAPI = 'https://api.liteapi.travel/v3.0';
+const NATIONALITY: Record<string, string> = { PKR: 'PK', GBP: 'GB', USD: 'US' };
+const firstAmount = (list: any) => (Array.isArray(list) && typeof list[0]?.amount === 'number' ? list[0].amount : null);
+function parseInstantHotels(input: Record<string, unknown>) {
+  const dates = stayDates(input);
+  const adults = intIn(input.adults ?? 2, 1, 8, 'Choose between 1 and 8 guests per room.');
+  const currency = currencyOf(input);
+  const lat = Number(input.lat), lng = Number(input.lng);
+  const near = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  const city = cleanText(input.city, 60), countryCode = String(input.countryCode ?? '').toUpperCase();
+  if (!near && (city.length < 2 || !/^[A-Z]{2}$/.test(countryCode))) throw new Invalid('Choose a city from the list.');
+  const radius = Math.min(Math.max(Number(input.radius) || 2000, 300), 30000);
+  const stars = Array.isArray(input.stars) ? [...new Set(input.stars.map(Number).filter((n) => [1, 2, 3, 4, 5].includes(n)))] : [];
+  return { ...dates, adults, currency, near, lat, lng, radius, city, countryCode, stars };
+}
+function instantHotel(rate: any, info: any, nights: number) {
+  const offers = (Array.isArray(rate.roomTypes) ? rate.roomTypes : []).map((rt: any) => {
+    const r0 = Array.isArray(rt.rates) ? rt.rates[0] : null;
+    const total = firstAmount(rt.offerRetailRate) ?? firstAmount(r0?.retailRate?.total);
+    const cancel = r0?.cancellationPolicies;
+    return {
+      offerId: typeof rt.offerId === 'string' ? rt.offerId : null,
+      name: String(rt.name || r0?.name || 'Room').slice(0, 90),
+      board: r0?.boardName ? String(r0.boardName).slice(0, 40) : null,
+      total, currency: rt.offerRetailRate?.[0]?.currency ?? r0?.retailRate?.total?.[0]?.currency ?? null,
+      refundable: cancel?.refundableTag === 'RFN',
+      freeCancelUntil: cancel?.refundableTag === 'RFN' && cancel?.cancelPolicyInfos?.[0]?.cancelTime ? String(cancel.cancelPolicyInfos[0].cancelTime).slice(0, 25) : null,
+      maxOccupancy: Number.isInteger(r0?.maxOccupancy) ? r0.maxOccupancy : null,
+    };
+  }).filter((o: any) => o.offerId && typeof o.total === 'number' && o.total > 0).sort((a: any, b: any) => a.total - b.total);
+  if (!offers.length) return null;
+  const rating = typeof info?.rating === 'number' ? (info.rating > 5 ? info.rating / 2 : info.rating) : null;
+  const photo = info?.main_photo || info?.thumbnail || null;
+  return {
+    token: 'lite:' + rate.hotelId, hotelId: String(rate.hotelId), instant: true,
+    name: String(info?.name || 'Hotel').slice(0, 150), type: 'hotel',
+    images: photo ? [{ thumb: info?.thumbnail || photo, large: photo }] : [],
+    rating: rating ? Math.round(rating * 10) / 10 : null,
+    reviews: Number.isInteger(info?.review_count) ? info.review_count : Number.isInteger(info?.reviewCount) ? info.reviewCount : null,
+    stars: typeof info?.stars === 'number' && info.stars > 0 ? Math.round(info.stars) : null,
+    address: typeof info?.address === 'string' ? info.address.slice(0, 160) : null,
+    gps: typeof info?.latitude === 'number' ? { latitude: info.latitude, longitude: info.longitude } : null,
+    total: offers[0].total, pricePerNight: Math.round(offers[0].total / Math.max(nights, 1)),
+    offers: offers.slice(0, 6), amenities: [], nearby: [], essentialInfo: [],
+  };
+}
+async function instantHotels(input: Record<string, unknown>, origin: string | null) {
+  const key = Deno.env.get('LITEAPI_KEY') ?? '';
+  if (!key) return reply({ ok: false, kind: 'instant-hotels', notice: 'off', data: null }, 200, origin);
+  let s;
+  try { s = parseInstantHotels(input); } catch (e) {
+    return reply({ ok: false, reason: 'invalid', message: e instanceof Invalid ? e.message : 'Invalid request.' }, 400, origin);
+  }
+  const body: Record<string, unknown> = {
+    checkin: s.checkIn, checkout: s.checkOut, currency: s.currency, guestNationality: NATIONALITY[s.currency] || 'US',
+    occupancies: [{ adults: s.adults }], limit: 40, timeout: 12, maxRatesPerHotel: 6,
+    ...(s.near ? { latitude: s.lat, longitude: s.lng, radius: s.radius } : { cityName: s.city, countryCode: s.countryCode }),
+    ...(s.stars.length ? { starRating: s.stars } : {}),
+  };
+  try {
+    const res = await fetch(`${LITEAPI}/hotels/rates`, { method: 'POST', headers: { 'X-API-Key': key, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(25000) });
+    const json: any = await res.json().catch(() => null);
+    if (!res.ok || !json) {
+      console.error('liteapi rates', res.status, JSON.stringify(json?.error ?? json ?? '').slice(0, 200));
+      return reply({ ok: false, kind: 'instant-hotels', notice: res.status === 401 || res.status === 403 ? 'setup' : 'unavailable', data: null }, 200, origin);
+    }
+    const info = new Map((Array.isArray(json.hotels) ? json.hotels : []).map((h: any) => [String(h.id), h]));
+    const hotels = (Array.isArray(json.data) ? json.data : []).map((r: any) => instantHotel(r, info.get(String(r.hotelId)), s.nights)).filter(Boolean);
+    return reply({ ok: hotels.length > 0, kind: 'instant-hotels', currency: s.currency, sandbox: !!json.sandbox, search: { checkIn: s.checkIn, checkOut: s.checkOut, nights: s.nights, adults: s.adults }, data: hotels.length ? { hotels } : null, notice: hotels.length ? null : 'empty', fetchedAt: new Date().toISOString() }, 200, origin);
+  } catch (e) {
+    console.error('liteapi rates', String((e as Error)?.message ?? e).slice(0, 200));
+    return reply({ ok: false, kind: 'instant-hotels', notice: 'unavailable', data: null }, 200, origin);
+  }
+}
+
 // ---------- Shared cache + monthly cap for one SerpApi search ----------
 async function cachedSearch(db: any, apiKey: string, key: string, ttlHours: number, run: () => Promise<any>) {
   const { data: row } = await db.from('uniworld_rate_cache').select('payload,fetched_at,expires_at').eq('key', key).maybeSingle();
@@ -615,7 +692,7 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.1';
+const BUILD = '2026-10-24.2';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -643,9 +720,10 @@ Deno.serve(async (req) => {
   if (input.ping) {
     const month = new Date().toISOString().slice(0, 7);
     const { data } = await db.from('uniworld_serpapi_usage').select('calls').eq('month', month).maybeSingle();
-    return reply({ ok: true, build: BUILD, source: await sourceHash(), configured: !!apiKey, usage: { month, calls: data?.calls ?? 0, cap: MONTHLY_CAP }, ttlHours: TTL_HOURS }, 200, origin);
+    return reply({ ok: true, build: BUILD, source: await sourceHash(), configured: !!apiKey, instant: { hotels: !!Deno.env.get('LITEAPI_KEY') }, usage: { month, calls: data?.calls ?? 0, cap: MONTHLY_CAP }, ttlHours: TTL_HOURS }, 200, origin);
   }
 
+  if (input.kind === 'instant-hotels') return instantHotels(input, origin);
   if (input.kind === 'hotels' || input.kind === 'hotel' || input.kind === 'flights') return listingReply(String(input.kind), input, db, apiKey, origin);
 
   let t: Trip;

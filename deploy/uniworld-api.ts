@@ -333,6 +333,42 @@ async function lookupAllowed(req: Request, records: () => any) {
   return true;
 }
 
+// ---------- Instant hotel booking (liteAPI): the app books and the guest pays in the app ----------
+// Off until the LITEAPI_KEY secret exists. The guest pays on liteAPI's secure payment form;
+// the booking is then confirmed automatically. The team is alerted only if something fails.
+const LITEAPI_BOOK = 'https://book.liteapi.travel/v3.0';
+async function lite(path: string, payload?: unknown) {
+  const key = Deno.env.get('LITEAPI_KEY');
+  if (!key) throw new HttpError('Instant booking isn’t switched on yet. Send a request instead.', 503);
+  const res = await fetch(LITEAPI_BOOK + path, {
+    method: payload === undefined ? 'GET' : 'POST',
+    headers: { 'X-API-Key': key, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload), signal: AbortSignal.timeout(45000),
+  });
+  const json: any = await res.json().catch(() => null);
+  return { status: res.status, ok: res.ok && !!json?.data, json };
+}
+const liteError = (json: any) => String(json?.error?.message ?? json?.error?.description ?? json?.message ?? '').slice(0, 160);
+function instantTripFrom(v: any) {
+  const checkIn = date(v?.checkIn), checkOut = date(v?.checkOut), nights = nightsBetween(checkIn, checkOut);
+  if (nights < 1 || nights > 30) throw new HttpError('Choose a stay between 1 and 30 nights.');
+  const hotelName = safe(v?.hotelName, 150);
+  if (!hotelName) throw new HttpError('Choose a hotel first.');
+  return {
+    hotelId: safe(v?.hotelId, 40), hotelName, city: safe(v?.city, 80), image: /^https:\/\//.test(safe(v?.image, 500)) ? safe(v.image, 500) : '',
+    checkIn, checkOut, nights, adults: int(v?.adults ?? 2, 1, 8), roomName: safe(v?.roomName, 90), board: safe(v?.board, 40),
+    sandbox: v?.sandbox === true,
+  };
+}
+function holderFrom(v: any) {
+  const firstName = safe(v?.firstName, 60), lastName = safe(v?.lastName, 60), email = safe(v?.email, 150), phone = safe(v?.phone, 40);
+  if (firstName.length < 1 || lastName.length < 1) throw new HttpError('Enter the guest’s first and last name as on their passport.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError('Enter an email address for the hotel confirmation.');
+  const digits = phone.replace(/\D/g, '');
+  if (!/^\+?[\d\s().-]+$/.test(phone) || digits.length < 7 || digits.length > 15) throw new HttpError('Please enter a phone or WhatsApp number with your country code.');
+  return { firstName, lastName, email, phone };
+}
+
 // ---------- Team settings (WhatsApp number, default payment instructions) ----------
 const SETTINGS_ID = 'system:settings';
 async function readSettings(records: () => any) {
@@ -532,7 +568,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.2';
+const BUILD = '2026-10-24.3';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -632,6 +668,7 @@ Deno.serve(async (req) => {
         favorites: (rows.find((r: any) => r.kind === 'favorites') as any)?.body ?? [],
         savedHotels: (rows.find((r: any) => r.kind === 'saved-hotels') as any)?.body ?? [],
         contact: { whatsapp: (await readSettings(records)).whatsapp },
+        instant: { hotels: !!Deno.env.get('LITEAPI_KEY') },
         aiMode: 'on-device',
         displayName: 'This device',
       }, 200, origin);
@@ -660,6 +697,92 @@ Deno.serve(async (req) => {
       const result = saved.data?.body ?? record;
       if (!saved.data || saved.data.body.created === now) inBackground(Promise.all([notifyTeam(result), pushTeam(records, { title: `New ${result.kind === 'umrah' ? 'Umrah ' : ''}request · ${result.id}`, body: `${result.name} · ${result.title}`, url: '/#staff', tag: result.id })]));
       return json(forCustomer(result), 201, origin);
+    }
+    // ----- Instant hotel booking (liteAPI) -----
+    if (path[0] === 'instant' && path[1] === 'hotel' && path[2] === 'prebook' && method === 'POST') {
+      const input = await body(req);
+      if (!UUID.test(input.requestId || '')) throw new HttpError('Please start again.');
+      const requestId = String(input.requestId).toLowerCase(), offerId = safe(input.offerId, 4000);
+      if (offerId.length < 8) throw new HttpError('Choose a room first.');
+      const trip = instantTripFrom(input.trip);
+      const r = await lite('/rates/prebook', { offerId, usePaymentSdk: true });
+      if (!r.ok) {
+        console.error('liteapi prebook', r.status, liteError(r.json));
+        throw new HttpError(r.status === 410 || r.status === 409 ? 'This room was just booked by someone else. Please choose another room.' : 'We couldn’t hold this room just now. Please try again or choose another room.', 409);
+      }
+      const x = r.json.data, rate = x.roomTypes?.[0]?.rates?.[0], cancel = rate?.cancellationPolicies;
+      const hold = {
+        requestId, prebookId: String(x.prebookId), transactionId: String(x.transactionId ?? ''), price: Number(x.price), currency: String(x.currency),
+        trip: { ...trip, refundable: cancel?.refundableTag === 'RFN', freeCancelUntil: cancel?.refundableTag === 'RFN' ? String(cancel?.cancelPolicyInfos?.[0]?.cancelTime ?? '').slice(0, 25) || null : null, board: rate?.boardName ? String(rate.boardName).slice(0, 40) : trip.board },
+        created: Date.now(), done: null,
+      };
+      if (!hold.transactionId || !x.secretKey || !(hold.price > 0)) throw new HttpError('Payment isn’t available for this room. Please choose another room.', 409);
+      const { error } = await records().upsert({ id: owner + ':instant:' + requestId, owner, kind: 'instant-hold', body: hold, created: hold.created }, { onConflict: 'id' });
+      if (error) throw error;
+      return json({ prebookId: hold.prebookId, transactionId: hold.transactionId, secretKey: String(x.secretKey), price: hold.price, currency: hold.currency, priceChanged: Number(x.priceDifferencePercent) !== 0, cancellationChanged: !!x.cancellationChanged, refundable: hold.trip.refundable, freeCancelUntil: hold.trip.freeCancelUntil, board: hold.trip.board, sandbox: trip.sandbox }, 200, origin);
+    }
+    if (path[0] === 'instant' && path[1] === 'hotel' && path[2] === 'book' && method === 'POST') {
+      const input = await body(req);
+      if (!UUID.test(input.requestId || '')) throw new HttpError('Please start again.');
+      const requestId = String(input.requestId).toLowerCase(), holdKey = owner + ':instant:' + requestId, key = owner + ':request:' + requestId;
+      const held = await records().select('body').eq('id', holdKey).eq('owner', owner).maybeSingle();
+      if (!held.data) throw new HttpError('This booking has expired. Please choose the room again.', 404);
+      const hold = held.data.body;
+      if (hold.done) { const done = await records().select('body').eq('id', key).maybeSingle(); if (done.data) return json(forCustomer(done.data.body), 200, origin); }
+      const holder = holderFrom(input.holder);
+      if (input.consent !== true) throw new HttpError('Please agree to be contacted about this booking.');
+      if (Date.now() - hold.created > 60 * 60000) throw new HttpError('This room hold has expired. Please choose the room again.', 410);
+      const recent = await records().select('created').eq('owner', owner).eq('kind', 'request').order('created', { ascending: false }).limit(15);
+      if ((recent.data ?? []).filter((x: any) => x.created > Date.now() - 86400000).length >= 15) throw new HttpError('You have made a lot of bookings today. Please call or email Uniworld instead.', 429);
+      const r = await lite('/rates/book', {
+        prebookId: hold.prebookId, clientReference: requestId,
+        holder, guests: [{ occupancyNumber: 1, firstName: holder.firstName, lastName: holder.lastName, email: holder.email, phone: holder.phone }],
+        payment: { method: 'TRANSACTION_ID', transactionId: hold.transactionId },
+        metadata: { platform: 'web', language: 'en' },
+      });
+      const now = Date.now(), t = hold.trip, booked = r.ok && r.json.data;
+      const b = booked ? r.json.data : null;
+      const record: any = {
+        id: await referenceFor(requestId), recordId: requestId, kind: 'hotel', title: b?.hotel?.name || t.hotelName, destination: t.city, image: t.image,
+        start: t.checkIn, end: t.checkOut, travelers: t.adults, nights: t.nights, hotelName: t.hotelName, city: t.city,
+        details: `${t.nights} night${t.nights > 1 ? 's' : ''}${t.city ? ' · ' + t.city : ''}${t.roomName ? ' · ' + t.roomName : ''}${t.board ? ' · ' + t.board : ''}`,
+        estimateUsd: null, seen: null, chosen: `${t.roomName || 'Room'}${t.board ? ' · ' + t.board : ''}${t.refundable ? ` · free cancellation${t.freeCancelUntil ? ' until ' + t.freeCancelUntil : ''}` : ' · non-refundable'}`,
+        name: `${holder.firstName} ${holder.lastName}`, phone: holder.phone, email: holder.email, contactBy: 'whatsapp', note: safe(input.note, 800),
+        market: MARKETS.includes(input.market) ? input.market : 'USD', created: now, updated: now,
+        instant: { provider: 'liteapi', prebookId: hold.prebookId, bookingId: b?.bookingId ? String(b.bookingId) : null, status: b?.status ? String(b.status) : 'FAILED', confirmation: b?.hotelConfirmationCode ? String(b.hotelConfirmationCode) : null, refundable: !!t.refundable, freeCancelUntil: t.freeCancelUntil, sandbox: !!t.sandbox, error: booked ? null : liteError(r.json) || `HTTP ${r.status}` },
+        staff: { note: '' },
+      };
+      if (booked) {
+        Object.assign(record, {
+          status: 'confirmed', customerMessage: 'Booked and paid in the app. Your hotel is confirmed. Show your Uniworld reference at check-in; the hotel’s own confirmation number appears here when the hotel sends it.',
+          payment: { status: 'paid', amount: Number(b.price ?? hold.price), currency: String(b.currency ?? hold.currency), link: '', note: 'Paid by card in the app', dueAt: now, paidAt: now, customerSent: null },
+          history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'confirmed', by: 'app' }, { at: now, status: 'payment_paid', by: 'app' }],
+        });
+      } else {
+        console.error('liteapi book', r.status, record.instant.error);
+        Object.assign(record, {
+          status: 'new', customerMessage: 'The hotel couldn’t confirm this room automatically. You have not been charged: any hold on your card is released by your bank, usually within 1–2 business days. A Uniworld advisor will contact you with the best alternative.',
+          payment: { status: 'none' }, history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'instant_failed', by: 'app' }],
+          staff: { note: `Instant booking failed (${record.instant.error}). Check the liteAPI dashboard for prebook ${hold.prebookId} before offering an alternative.` },
+        });
+      }
+      const { error } = await records().upsert({ id: key, owner, kind: 'request', body: record, created: now }, { onConflict: 'id' });
+      if (error) throw error;
+      await records().update({ body: { ...hold, done: now } }).eq('id', holdKey);
+      inBackground(Promise.all([notifyTeam(record), pushTeam(records, booked
+        ? { title: `Booked automatically · ${record.id}`, body: `${record.name} · ${record.title} · ${record.payment.currency} ${Number(record.payment.amount).toLocaleString('en-US')} paid`, url: '/#staff', tag: record.id }
+        : { title: `Needs help · ${record.id}`, body: `Instant hotel booking failed for ${record.name} (${record.title}). Contact them with an alternative.`, url: '/#staff', tag: record.id })]));
+      return json(forCustomer(record), booked ? 201 : 202, origin);
+    }
+    if (path[0] === 'instant' && path[1] === 'hotel' && path[2] === 'status' && path[3] && method === 'GET') {
+      const row = await requestFor(records, owner, uuidParam(path[3]));
+      if (!row?.body?.instant?.bookingId) throw new HttpError('Booking not found.', 404);
+      const r = await lite('/bookings/' + encodeURIComponent(row.body.instant.bookingId));
+      if (!r.ok) return json(forCustomer(row.body), 200, origin);
+      const x = r.json.data, record = { ...row.body, instant: { ...row.body.instant, status: String(x.status ?? row.body.instant.status), confirmation: x.hotelConfirmationCode ? String(x.hotelConfirmationCode) : row.body.instant.confirmation } };
+      if (/CANCEL/i.test(record.instant.status) && record.status !== 'cancelled') { record.status = 'cancelled'; record.history = [...(record.history ?? []), { at: Date.now(), status: 'cancelled', by: 'hotel' }]; }
+      if (JSON.stringify(record.instant) !== JSON.stringify(row.body.instant)) { record.updated = Date.now(); await records().update({ body: record }).eq('id', row.id); }
+      return json(forCustomer(record), 200, origin);
     }
     // Find my booking: the reference plus the phone number or email used on the request.
     if (path[0] === 'requests' && path[1] === 'find' && method === 'POST') {
