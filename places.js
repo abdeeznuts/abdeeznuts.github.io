@@ -26,18 +26,79 @@ function build(j) {
     e.key = fold(`${code} ${city} ${e.country} all airports`);
     list.push(e); byCode.set(code, e);
   }
-  for (const [code, name, city, cc, rank] of j.a || []) {
-    const e = { code, ids: code, metro: false, city: city || name, name, country: countries[cc] || cc, cc, rank };
+  for (const [code, name, city, cc, rank, lat, lng] of j.a || []) {
+    const e = { code, ids: code, metro: false, city: city || name, name, country: countries[cc] || cc, cc, rank, lat, lng };
     e.key = fold(`${code} ${e.city} ${name} ${e.country}`);
     list.push(e); byCode.set(code, e);
     // Cities for hotel searches: one entry per city, from its biggest airport.
     const cityKey = fold(e.city) + '|' + cc;
     if (e.city && rank < 2 && !cities.has(cityKey)) cities.set(cityKey, { city: e.city.replace(/\s*\(.*\)$/, ''), country: e.country, cc, rank, key: fold(`${e.city} ${e.country}`) });
   }
-  return { list, byCode, cities: [...cities.values()] };
+  return { list, byCode, cities: [...cities.values()], countries };
 }
 
 export const worldReady = () => !!world;
+// Countries for passports (every country with an airport, plus the few without one).
+const NO_AIRPORT = { AD: 'Andorra', LI: 'Liechtenstein', MC: 'Monaco', PS: 'Palestine', SM: 'San Marino', UA: 'Ukraine', VA: 'Vatican City' };
+export function countryList() {
+  const all = { ...NO_AIRPORT, ...(world?.countries || {}) };
+  return Object.entries(all).filter(([cc]) => /^[A-Z]{2}$/.test(cc)).sort((x, y) => x[1].localeCompare(y[1]));
+}
+
+// ---------- Distances, for nearby airports, hidden-city and stopover searches ----------
+function km(a, b) {
+  const R = 6371, rad = Math.PI / 180, dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+// The place an airport (or a whole city like LON) sits at.
+function spot(code) {
+  const e = world?.byCode.get(String(code || '').toUpperCase());
+  if (!e) return null;
+  if (!e.metro) return Number.isFinite(e.lat) ? e : null;
+  const first = world.byCode.get(e.ids.split(',')[0]);
+  return first && Number.isFinite(first.lat) ? { ...first, code: e.code } : null;
+}
+// Major international airports: the ones long-haul tickets usually connect through or continue to.
+const MAJOR = new Set(('DXB DOH AUH SHJ MCT BAH KWI RUH JED DMM MED AMM BEY CAI IST SAW TBS GYD ' +
+  'DEL BOM BLR MAA HYD CCU COK KHI LHE ISB PEW CMB DAC KTM MLE TAS ALA ' +
+  'SIN KUL BKK HKG ICN NRT HND PEK PVG CAN TPE MNL CGK SGN HAN DPS ' +
+  'LHR LGW MAN CDG AMS FRA MUC MAD BCN FCO MXP ZRH VIE CPH ARN OSL HEL DUB BRU LIS ATH WAW PRG BUD OTP GVA BHX GLA ' +
+  'ADD NBO JNB CPT LOS ACC CMN ALG TUN KRT DAR EBB KGL DKR ' +
+  'JFK EWR IAD ORD ATL DFW IAH LAX SFO SEA MIA BOS YYZ YUL YVR MEX GRU EZE BOG LIM SCL PTY ' +
+  'SYD MEL BNE PER AKL').split(' '));
+const bigAirports = () => world.list.filter((e) => !e.metro && MAJOR.has(e.code) && Number.isFinite(e.lat));
+const NOT_AIRLINE = new Set(['TEB', 'HPN', 'FRG', 'MMU', 'BFI', 'VNY']);
+// The world's big connecting hubs first: tickets most often change planes (or continue) here.
+const PRIORITY = 'DXB DOH IST AUH JED RUH SHJ MCT BAH KWI CAI ADD NBO AMM FRA AMS CDG LHR MUC ZRH VIE SIN KUL BKK HKG ICN NRT PEK PVG DEL BOM'.split(' ');
+const prio = (code) => { const i = PRIORITY.indexOf(code); return i < 0 ? PRIORITY.length : i; };
+// Other airports with flights within reach of this one (e.g. LHE -> SKT, LYP), closest first.
+export function nearbyAirports(code, maxKm = 170, max = 4) {
+  const a = spot(code);
+  if (!a) return [];
+  return world.list.filter((e) => !e.metro && e.rank <= 1 && e.cc === a.cc && !NOT_AIRLINE.has(e.code) && Number.isFinite(e.lat) && e.code !== a.code && km(a, e) <= maxKm)
+    .sort((x, y) => km(a, x) - km(a, y)).slice(0, max - 1).map((e) => e.code);
+}
+// Hidden city: big airports a bit past the destination, reached through it (e.g. LHE-JED -> KRT, ADD, NBO, CAI).
+export function beyondAirports(fromCode, toCode, max = 6) {
+  const a = spot(fromCode), b = spot(toCode);
+  if (!a || !b) return [];
+  const ab = km(a, b);
+  return bigAirports().map((x) => ({ x, bx: km(b, x), ax: km(a, x) }))
+    .filter(({ x, bx, ax }) => x.cc !== a.cc && x.cc !== b.cc && bx >= 300 && bx <= 4500 && ax > ab && (ab + bx) / ax <= 1.35)
+    .sort((p, q) => ((ab + p.bx) / p.ax + 0.015 * prio(p.x.code)) - ((ab + q.bx) / q.ax + 0.015 * prio(q.x.code)))
+    .slice(0, max).map(({ x }) => x.code);
+}
+// Split tickets: big hub airports roughly on the way (e.g. LHE-JED -> DXB, DOH, MCT, BAH).
+export function hubAirports(fromCode, toCode, max = 5) {
+  const a = spot(fromCode), b = spot(toCode);
+  if (!a || !b) return [];
+  const ab = km(a, b);
+  return bigAirports().map((h) => ({ h, ah: km(a, h), hb: km(h, b) }))
+    .filter(({ h, ah, hb }) => h.code !== a.code && h.code !== b.code && ah >= 300 && hb >= 300 && (ah + hb) / ab <= 1.3)
+    .sort((p, q) => prio(p.h.code) - prio(q.h.code) || (p.ah + p.hb) - (q.ah + q.hb))
+    .slice(0, max).map(({ h }) => h.code);
+}
 export const airportByCode = (code) => world?.byCode.get(String(code || '').trim().toUpperCase()) || null;
 
 // "London Heathrow (LHR)", "New York John F. Kennedy (JFK)", "London · all airports (LON)"

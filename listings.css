@@ -231,3 +231,39 @@
 .ap-main small{font-size:10px;color:#6f8573;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-list code{font-family:inherit;font-weight:700;font-size:11px;background:#eef3ee;border-radius:6px;padding:3px 6px;letter-spacing:.5px;flex-shrink:0}
 .ls-instant{display:block;color:#2f6b45!important;font-weight:600;margin:4px 0 6px}
+
+/* Instant fares, nearby airports and cheaper ways to fly */
+.lf-nearby-note{font-size:11px;color:#2f5d4b;margin-top:4px}
+.lf-instant{background:#f2f7f1;border:1px solid #d5e4d6;border-radius:16px;padding:16px;margin-bottom:16px;display:grid;gap:12px}
+.lf-instant h3,.lf-deals h3{font-size:17px;letter-spacing:-.3px;margin:2px 0 0}
+.lf-instant .ls-foot{margin:0}
+.lf-instant-badge{background:#163639;color:#fff}
+.lf-back-label{font-size:10px;font-weight:650;color:#3c5e52;margin-bottom:-6px}
+.lf-sub{font-size:14px;margin:18px 0 10px;color:#3c5e52}
+.lf-deals{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:16px;display:grid;gap:12px}
+.lf-deals>p{font-size:12px;color:#5d7363}
+.lf-tricks{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}
+.lf-trick{display:grid;gap:10px;align-content:start;border:1px dashed #d9e1d5;border-radius:14px;padding:14px;min-width:0}
+.lf-trick h4{font-size:14px;margin:0}
+.lf-trick>p{font-size:12px;color:#5d7363;line-height:1.6;margin:0}
+.lf-trick>.outline-button{justify-self:start}
+.lf-warn{background:#fff6e8;color:#6d4a17;border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6}
+.lf-warn ul{margin:6px 0 0;padding-left:18px;display:grid;gap:4px}
+.lf-warn-strong{background:#fdeee8;color:#7a2e14}
+.lf-ok{display:flex;gap:8px;align-items:center;margin-top:10px;font-weight:650;cursor:pointer}
+.lf-ok input{width:18px;height:18px;accent-color:var(--ink)}
+.lf-deal-none{font-size:12px;color:#5d7363;margin:0}
+.lf-deal-lock{font-size:10px;color:#8a5a1f;text-align:right;max-width:120px}
+.lf-save{background:#163639;color:#fff}
+.lf-ticket{display:grid;gap:6px}
+.lf-ticket>small{font-size:10px;font-weight:650;color:#3c5e52;text-transform:uppercase;letter-spacing:.4px}
+.lf-connect{font-size:11px;background:#eef3ee;color:#2f5d4b;border-radius:8px;padding:6px 10px;margin:0}
+.lf-details li.lf-skip{opacity:.6}
+.lf-details li.lf-skip b{text-decoration:line-through}
+.flight-nearby label{display:flex;gap:8px;align-items:center;font-size:12px;cursor:pointer}
+.flight-nearby input{width:18px;height:18px;accent-color:var(--ink)}
+.if-pax{border:1px solid var(--line);border-radius:12px;padding:12px 14px 14px;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:12px;min-width:0}
+.if-pax legend{font-size:11px;font-weight:700;padding:0 6px}
+.if-pax>label{font-size:10px;font-weight:600;min-width:0}
+.if-pax>label>.field-input{margin-top:8px;width:100%}
+@media(max-width:620px){.if-pax{grid-template-columns:1fr}.lf-instant,.lf-deals{padding:14px 12px}}

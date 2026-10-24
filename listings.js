@@ -2,8 +2,10 @@
 // from Google Flights, through Uniworld's price service. Every result can be booked
 // with a request to a Uniworld advisor (no payment in the app).
 import { fetchLive, money, parseAirport, sameAirports, AIRPORTS } from './live-rates.js';
-import { loadWorld, airportByCode, labelOf, cityLookup } from './places.js';
+import { loadWorld, airportByCode, labelOf, cityLookup, nearbyAirports } from './places.js';
 import { openInstant, instantOn } from './instant.js';
+import { openFlightBooking, instantFlightsOn, anyMoney } from './instant-flights.js';
+import { initDeals, dealsHtml, dealAction } from './flight-deals.js';
 
 let d = null; // helpers from app.js: openModal, openRequest, esc, icon, state, toast
 
@@ -34,6 +36,7 @@ export const placeQuery = (dest) => PLACES.find((p) => p.label.toLowerCase() ===
 
 export function initListings(deps) {
   d = deps;
+  initDeals(deps);
   document.addEventListener('click', onDocClick);
 }
 
@@ -391,23 +394,35 @@ function onDocClick(ev) {
 // ---------- Flights: every option for a route ----------
 const CABIN_NAMES = { Economy: 'Economy', 'Premium economy': 'Premium economy', Business: 'Business', 'First class': 'First class' };
 
+// A city's own airport plus others within reach (e.g. Lahore + Sialkot), when the traveler asks.
+function idsFor(p, nearby) {
+  if (!nearby || p.ids.includes(',')) return p.ids || p.code;
+  return [p.code, ...nearbyAirports(p.code)].join(',');
+}
+const extraAirports = (p, ids) => ids.split(',').filter((c) => c !== p.code && !(p.ids || '').split(',').includes(c));
+
 export async function searchFlights(el, search) {
   if (!el) return;
   await loadWorld();
   const a = parseAirport(search.from), b = parseAirport(search.to);
   if (!a || !b) { el.innerHTML = `<div class="ls-notice"><h3>Which airports?</h3><p>Start typing a city or airport and pick it from the list, or type a 3-letter code like KHI or JFK.</p></div>`; return; }
   if (sameAirports(a, b)) { el.innerHTML = `<div class="ls-notice"><h3>Choose two different airports.</h3></div>`; return; }
-  const fs = { a, b, ...search, cabin: CABIN_NAMES[search.cabin] || 'Economy', sort: 'best', stops: 'any', data: null, fetchedAt: null };
+  const nearby = !!search.nearby;
+  let fromIds = idsFor(a, nearby), toIds = idsFor(b, nearby);
+  // Never let a nearby airport of one side be the other side's airport.
+  toIds = toIds.split(',').filter((c) => !fromIds.split(',').includes(c)).join(',') || b.ids;
+  const fs = { a, b, ...search, nearby, fromIds, toIds, fromLabel: airportLabel(a.code), toLabel: airportLabel(b.code), cabin: CABIN_NAMES[search.cabin] || 'Economy', sort: 'best', stops: 'any', data: null, fetchedAt: null, instant: null, deals: null };
   el._flights = fs;
   if (!el._wired) {
     el._wired = true;
     el.addEventListener('click', (ev) => flightAction(ev, el));
   }
-  el.innerHTML = `<div class="lf-head"><span class="eyebrow">LIVE FROM GOOGLE FLIGHTS</span><h2>${d.esc(airportLabel(a.code))} → ${d.esc(airportLabel(b.code))}</h2><p>${flightSummary(fs)}</p></div><div class="lf-list">${Array.from({ length: 3 }, () => '<article class="lf-card ls-skel" aria-hidden="true"><span></span><span></span><span></span></article>').join('')}<p class="ls-wait" role="status">Finding real flights…</p></div>`;
+  el.innerHTML = `${flightHead(fs)}<div class="lf-instant-slot"></div><div class="lf-list">${Array.from({ length: 3 }, () => '<article class="lf-card ls-skel" aria-hidden="true"><span></span><span></span><span></span></article>').join('')}<p class="ls-wait" role="status">Finding real flights…</p></div>`;
   el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+  if (instantFlightsOn()) loadInstantFlights(el, fs);
   const slow = setTimeout(() => { const w = el.querySelector('.ls-wait'); if (w) w.textContent = 'Comparing airlines and routes. This can take a few seconds…'; }, 5000);
   try {
-    const res = await fetchLive({ kind: 'flights', from: a.ids || a.code, to: b.ids || b.code, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, cabin: fs.cabin, currency: cur() });
+    const res = await fetchLive({ kind: 'flights', from: fromIds, to: toIds, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, cabin: fs.cabin, currency: cur() });
     if (el._flights !== fs) return;
     fs.data = res.data; fs.fetchedAt = res.fetchedAt; fs.notice = res.data ? (res.stale ? 'partial' : null) : (res.notice || 'unavailable'); fs.currency = res.currency;
     renderFlights(el, fs);
@@ -415,6 +430,61 @@ export async function searchFlights(el, search) {
     if (el._flights !== fs) return;
     el.querySelector('.lf-list').innerHTML = e.invalid ? `<div class="ls-notice"><h3>Let’s adjust your search.</h3><p>${d.esc(e.message)}</p></div>` : noticeCard('unavailable', 'retry', 'lf');
   } finally { clearTimeout(slow); }
+}
+
+function flightHead(fs) {
+  const e = d.esc, more = [...extraAirports(fs.a, fs.fromIds), ...extraAirports(fs.b, fs.toIds)];
+  return `<div class="lf-head"><span class="eyebrow">LIVE FARES${instantFlightsOn() ? ' · BOOK NOW OR ASK AN ADVISOR' : ' FROM GOOGLE FLIGHTS'}</span><h2>${e(fs.fromLabel)} → ${e(fs.toLabel)}</h2><p>${flightSummary(fs)}</p>${more.length ? `<p class="lf-nearby-note">Including nearby airports: ${more.map(e).join(', ')}</p>` : ''}</div>`;
+}
+
+// Fares the app can ticket itself (Duffel), shown above the Google Flights list.
+async function loadInstantFlights(el, fs) {
+  fs.instant = { status: 'loading' };
+  paintInstant(el, fs);
+  try {
+    const res = await fetchLive({ kind: 'instant-flights', from: fs.a.code, to: fs.b.code, depart: fs.start, return: fs.end || undefined, adults: Number(fs.travelers) || 1, cabin: fs.cabin, currency: cur() });
+    if (el._flights !== fs) return;
+    fs.instant = res.data?.options?.length ? { status: 'ready', options: res.data.options, sandbox: !!res.sandbox, fetchedAt: res.fetchedAt, all: false } : { status: res.notice || 'empty' };
+    fs.instantSandbox = !!res.sandbox;
+  } catch {
+    if (el._flights !== fs) return;
+    fs.instant = { status: 'error' };
+  }
+  paintInstant(el, fs);
+}
+function paintInstant(el, fs) {
+  const slot = el.querySelector('.lf-instant-slot');
+  if (slot) slot.innerHTML = instantHtml(fs);
+}
+function instantHtml(fs) {
+  const st = fs.instant, e = d.esc;
+  if (!st || st.status === 'off' || st.status === 'setup') return '';
+  if (st.status === 'loading') return `<section class="lf-instant"><span class="eyebrow">BOOK NOW · E-TICKET IN MINUTES</span><p class="ls-wait" role="status">Checking fares you can book right now…</p></section>`;
+  if (st.status !== 'ready') return '';
+  let list = [...st.options];
+  if (fs.stops === 'nonstop') list = list.filter((o) => o.stops === 0 && (!o.back || o.back.stops === 0));
+  else if (fs.stops === 'one') list = list.filter((o) => o.stops <= 1 && (!o.back || o.back.stops <= 1));
+  if (fs.sort === 'fastest') list.sort((x, y) => (x.durationMin ?? 1e9) - (y.durationMin ?? 1e9));
+  else if (fs.sort === 'earliest') list.sort((x, y) => String(x.depart?.time || '').localeCompare(String(y.depart?.time || '')));
+  else list.sort((x, y) => x.price - y.price);
+  const shown = st.all ? list : list.slice(0, 4);
+  return `<section class="lf-instant" aria-labelledby="lfInstantTitle"><span class="eyebrow">BOOK NOW · E-TICKET IN MINUTES${st.sandbox ? ' · TEST MODE' : ''}</span><h3 id="lfInstantTitle">Pay by card and get your ticket straight away</h3>
+    ${list.length ? `<div class="lf-list">${shown.map((o) => instantCard(o, fs, st.options.indexOf(o))).join('')}</div>${list.length > shown.length ? `<button class="text-button" data-lf="instant-more">Show all ${list.length} bookable fares</button>` : ''}` : `<p class="lf-deal-none">No bookable fares match these filters.</p>`}
+    <p class="ls-foot">Prices include taxes and are in the airline’s currency. If the airline can’t issue your ticket, you get a full refund automatically.</p></section>
+    <h3 class="lf-sub">More airlines · booked by a Uniworld advisor</h3>`;
+}
+function instantCard(o, fs, i) {
+  const e = d.esc, n = Number(fs.travelers) || 1;
+  const leg = (x) => { const via = (x.layovers || []).map((l) => l.id).filter(Boolean).join(', '); return `<div class="lf-route">
+      <div><b>${e(clock(x.depart?.time))}</b><small>${e(x.depart?.id || '')}</small></div>
+      <div class="lf-mid"><small>${e(dur(x.durationMin))}</small><i aria-hidden="true"></i><small>${x.stops === 0 ? 'Nonstop' : `${plural(x.stops, 'stop')}${via ? ` · ${e(via)}` : ''}`}</small></div>
+      <div><b>${e(clock(x.arrive?.time))}${x.depart?.time && x.arrive?.time && x.arrive.time.slice(0, 10) > x.depart.time.slice(0, 10) ? '<sup>+1</sup>' : ''}</b><small>${e(x.arrive?.id || '')}</small></div></div>`; };
+  return `<article class="lf-card lf-bookable">
+    <div class="lf-top">${o.logo ? `<img class="live-img live-logo" src="${e(o.logo)}" alt="" width="22" height="22" data-fallback="1"/>` : ''}<span>${e(o.airlines.join(' + ') || 'Airline')}</span><span class="lf-badge lf-instant-badge">Instant ticket</span>${o.refundable ? '<span class="lf-badge">Refundable</span>' : ''}</div>
+    ${leg(o)}${o.back ? `<small class="lf-back-label">Return${o.back.depart?.time ? ' · ' + e(weekday(o.back.depart.time.slice(0, 10))) : ''}</small>${leg(o.back)}` : ''}
+    <div class="lf-bottom"><div><strong>${anyMoney(o.price, o.currency)}</strong><small>${o.back ? 'round trip' : 'one way'} · ${n > 1 ? `total for ${n} travelers` : 'per person'}</small></div><button class="dark-button compact" data-lf="instant-book" data-i="${i}">Book now</button></div>
+    <details class="lf-details"><summary>Flight details</summary><ol>${[...o.legs, ...(o.back?.legs || [])].map((l) => `<li><b>${e(clock(l.from?.time))} ${e(l.from?.id || '')} → ${e(clock(l.to?.time))} ${e(l.to?.id || '')}</b><small>${[l.airline, l.flightNumber, l.airplane, dur(l.durationMin)].filter(Boolean).map(e).join(' · ')}</small></li>`).join('')}</ol><p class="small-print">${o.refundable ? 'Refundable before departure (airline fees may apply).' : 'Non-refundable.'} ${o.changeable ? 'Changes allowed (airline fees may apply).' : 'No changes.'}</p></details>
+  </article>`;
 }
 
 function flightSummary(fs) {
@@ -434,8 +504,8 @@ function sortedOptions(fs) {
 
 function renderFlights(el, fs) {
   const e = d.esc;
-  const head = `<div class="lf-head"><span class="eyebrow">LIVE FROM GOOGLE FLIGHTS</span><h2>${e(airportLabel(fs.a.code))} → ${e(airportLabel(fs.b.code))}</h2><p>${flightSummary(fs)}</p></div>`;
-  if (!fs.data) { el.innerHTML = head + `<div class="lf-list">${noticeCard(fs.notice, 'retry', 'lf')}</div>`; return; }
+  const head = flightHead(fs) + `<div class="lf-instant-slot">${instantHtml(fs)}</div>`;
+  if (!fs.data) { el.innerHTML = head + `<div class="lf-list">${noticeCard(fs.notice, 'retry', 'lf')}</div>` + `<div class="lf-deals-slot">${dealsHtml(fs)}</div>`; return; }
   const all = fs.data.options, cheapest = Math.min(...all.map((o) => o.price)), fastest = Math.min(...all.map((o) => o.durationMin ?? 1e9)), bestIndex = all.findIndex((o) => o.best);
   const options = sortedOptions(fs);
   const ins = fs.data.insights;
@@ -445,10 +515,15 @@ function renderFlights(el, fs) {
   const stops = [['any', 'Any stops'], ['nonstop', 'Nonstop'], ['one', '1 stop max']];
   el.innerHTML = head
     + (level ? `<p class="lf-insight"><b>${level}.</b>${ins.typical?.length === 2 ? ` Google’s usual range: ${money(ins.typical[0], cur)}–${money(ins.typical[1], cur)}.` : ''}</p>` : '')
-    + `<div class="lf-controls"><div role="group" aria-label="Sort flights">${sorts.map(([k, l]) => `<button class="chip ${fs.sort === k ? 'active' : ''}" data-lf="sort" data-v="${k}" aria-pressed="${fs.sort === k}">${l}</button>`).join('')}</div><div role="group" aria-label="Stops">${stops.map(([k, l]) => `<button class="chip ${fs.stops === k ? 'active' : ''}" data-lf="stops" data-v="${k}" aria-pressed="${fs.stops === k}">${l}</button>`).join('')}</div></div>`
+    + `<div class="lf-controls"><div role="group" aria-label="Sort flights">${sorts.map(([k, l]) => `<button class="chip ${fs.sort === k ? 'active' : ''}" data-lf="sort" data-v="${k}" aria-pressed="${fs.sort === k}">${l}</button>`).join('')}</div><div role="group" aria-label="Stops">${stops.map(([k, l]) => `<button class="chip ${fs.stops === k ? 'active' : ''}" data-lf="stops" data-v="${k}" aria-pressed="${fs.stops === k}">${l}</button>`).join('')}</div><button class="chip ${fs.nearby ? 'active' : ''}" data-lf="nearby" aria-pressed="${fs.nearby}">Nearby airports</button></div>`
     + `<div class="lf-list">${options.length ? options.map((o) => flightCard(o, fs, all.indexOf(o), cheapest, fastest, bestIndex)).join('') : `<div class="ls-notice"><h3>No flights match.</h3><p>Try allowing more stops.</p></div>`}</div>`
     + `<p class="ls-foot">${plural(all.length, 'flight')} · live from Google Flights, checked ${e(ago(fs.fetchedAt))}.${fs.end ? ' Round-trip prices include your return; your advisor confirms the return flight.' : ''} A Uniworld advisor confirms the final price before you pay. <a href="${e(fs.data.link)}" target="_blank" rel="noopener">See on Google Flights ↗</a></p>`
+    + `<div class="lf-deals-slot">${dealsHtml(fs)}</div>`
     + `<div class="lf-help"><p>Want a different time, airline or a multi-city trip?</p><button class="outline-button compact" data-lf="advisor-request">Ask an advisor</button></div>`;
+}
+function paintDeals(el, fs) {
+  const slot = el.querySelector('.lf-deals-slot');
+  if (slot) slot.innerHTML = dealsHtml(fs);
 }
 
 function flightCard(o, fs, i, cheapest, fastest, bestIndex) {
@@ -469,7 +544,7 @@ function flightCard(o, fs, i, cheapest, fastest, bestIndex) {
 }
 
 function flightPayload(o, fs) {
-  const from = airportLabel(fs.a.code), to = airportLabel(fs.b.code), n = Number(fs.travelers) || 1;
+  const from = fs.fromLabel, to = fs.toLabel, n = Number(fs.travelers) || 1;
   const stopsText = o.stops === 0 ? 'Nonstop' : `${plural(o.stops, 'stop')}${o.layovers.length ? ' via ' + o.layovers.map((l) => l.id).filter(Boolean).join(', ') : ''}`;
   const numbers = o.legs.map((l) => l.flightNumber).filter(Boolean).join(' + ');
   return {
@@ -485,12 +560,20 @@ function flightAction(ev, el) {
   if (!b) return;
   const fs = el._flights;
   const a = b.dataset.lf;
+  if (!fs) return;
+  if (dealAction(b, el, fs, () => { paintDeals(el, fs); if (a === 'deal-ok') el.querySelector('[data-lf="deal-ok"]')?.focus(); })) return;
   if (a === 'sort') { fs.sort = b.dataset.v; renderFlights(el, fs); }
   else if (a === 'stops') { fs.stops = b.dataset.v; renderFlights(el, fs); }
   else if (a === 'book') { const o = fs.data?.options?.[Number(b.dataset.i)]; if (o) d.openRequest(flightPayload(o, fs)); }
-  else if (a === 'retry') searchFlights(el, fs);
+  else if (a === 'instant-book') { const o = fs.instant?.options?.[Number(b.dataset.i)]; if (o) openFlightBooking(o, fs); }
+  else if (a === 'instant-more') { fs.instant.all = true; paintInstant(el, fs); }
+  else if (a === 'nearby') { d.onFlightSearch?.({ ...searchOf(fs), nearby: !fs.nearby }); searchFlights(el, { ...searchOf(fs), nearby: !fs.nearby }); }
+  else if (a === 'one-way') { d.onFlightSearch?.({ ...searchOf(fs), end: '' }); searchFlights(el, { ...searchOf(fs), end: '' }); }
+  else if (a === 'retry') searchFlights(el, searchOf(fs));
   else if (a === 'advisor' || a === 'advisor-request') {
-    const from = airportLabel(fs.a.code), to = airportLabel(fs.b.code);
+    const from = fs.fromLabel, to = fs.toLabel;
     d.openRequest({ kind: 'flight', from, to, start: fs.start, end: fs.end || '', travelers: Number(fs.travelers) || 1, cabin: fs.cabin, oneWay: !fs.end, title: `${from} → ${to}`, details: `${fs.cabin} · ${fs.end ? 'return' : 'one way'}` });
   }
 }
+// The search a results page came from (to search again with one change).
+const searchOf = (fs) => ({ kind: 'flight', from: fs.from, to: fs.to, start: fs.start, end: fs.end || '', travelers: fs.travelers, cabin: fs.cabin, nearby: fs.nearby });

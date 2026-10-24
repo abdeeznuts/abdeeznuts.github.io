@@ -202,12 +202,31 @@ function paymentBlock(r) {
 
 function instantBlock(r) {
   const x = r.instant, e = d.esc;
+  if (x?.provider === 'duffel') {
+    if (!x.pnr) return '';
+    const tickets = Array.isArray(x.tickets) ? x.tickets : [];
+    return `<div class="req-docs req-instant"><span class="eyebrow">TICKETED INSTANTLY${x.sandbox ? ' · TEST MODE' : ''}</span><ul>
+    <li><span>Airline booking reference</span><b>${e(x.pnr)}</b></li>
+    ${tickets.map((t, i) => `<li><span>E-ticket number${tickets.length > 1 ? ' ' + (i + 1) : ''}</span><b>${e(t)}</b></li>`).join('')}
+  </ul><p class="small-print">Use the booking reference on the airline’s website or app to check in, choose seats and add bags.</p></div>`;
+  }
   if (!x || !x.bookingId) return '';
   return `<div class="req-docs req-instant"><span class="eyebrow">BOOKED INSTANTLY${x.sandbox ? ' · TEST MODE' : ''}</span><ul>
     <li><span>Booking number</span><b>${e(x.bookingId)}</b></li>
     <li><span>Hotel confirmation</span><b>${x.confirmation ? e(x.confirmation) : 'On its way from the hotel'}</b></li>
     <li><span>Cancellation</span><b>${x.refundable ? `Free${x.freeCancelUntil ? ' until ' + e(String(x.freeCancelUntil).slice(0, 10)) : ''}` : 'Non-refundable'}</b></li>
   </ul>${x.confirmation ? '' : `<button class="text-button" data-action="req-instant-refresh" data-id="${e(r.recordId)}">Check for the hotel’s confirmation</button>`}</div>`;
+}
+
+// What the app did on its own, for the team.
+function staffInstant(r) {
+  const x = r.instant, e = d.esc, ic = d.icon, test = x.sandbox ? ' · TEST' : '';
+  if (x.provider === 'duffel') {
+    if (x.pnr) return `<p class="staff-alert">${ic('check')} Ticketed and paid automatically · PNR ${e(x.pnr)}${x.orderId ? ' · Duffel ' + e(x.orderId) : ''}${(x.tickets || []).length ? ' · e-tickets ' + x.tickets.map(e).join(', ') : ''}${test}</p>`;
+    if (x.unsure) return `<p class="staff-alert bad">${ic('info')} PAID, ticket not confirmed: ${e(x.error || 'unknown')}. Check Duffel before rebooking (see the note below)${test}.</p>`;
+    return `<p class="staff-alert bad">${ic('info')} Instant ticketing failed: ${e(x.error || 'unknown')}. ${x.refunded ? 'The payment was refunded automatically.' : '<b>Refund needed in Stripe.</b>'} Offer an alternative${test}.</p>`;
+  }
+  return `<p class="staff-alert ${x.bookingId ? '' : 'bad'}">${x.bookingId ? `${ic('check')} Booked and paid automatically · booking ${e(x.bookingId)}${x.confirmation ? ' · hotel ' + e(x.confirmation) : ''}${test}` : `${ic('info')} Instant booking failed: ${e(x.error || 'unknown')}. The customer was not charged. Offer an alternative.`}</p>`;
 }
 
 function documentsBlock(r) {
@@ -221,9 +240,9 @@ export function showRequest(r, fresh = false) {
   const open = (r.status === 'new' || r.status === 'in_progress') && payState(r) !== 'paid';
   d.openModal(`<div class="success-panel req-panel">
     <div class="success-icon">${ic(r.status === 'cancelled' ? 'x' : 'check')}</div>
-    <span class="eyebrow">${r.instant?.bookingId ? `YOUR ${KIND[r.kind] || 'TRIP'} BOOKING` : fresh ? 'REQUEST SENT' : `YOUR ${KIND[r.kind] || 'TRIP'} REQUEST`}</span>
+    <span class="eyebrow">${r.instant?.bookingId || r.instant?.pnr ? `YOUR ${KIND[r.kind] || 'TRIP'} BOOKING` : fresh ? 'REQUEST SENT' : `YOUR ${KIND[r.kind] || 'TRIP'} REQUEST`}</span>
     <h2 id="modalTitle">${fresh ? `Thank you, ${e(firstName(r.name))}.` : e(r.title)}</h2>
-    <p>${r.instant?.bookingId && r.status === 'confirmed' ? 'Booked and paid. Your stay is confirmed.' : fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
+    <p>${r.instant?.pnr && r.status === 'confirmed' ? 'Ticketed and paid. Your flight is confirmed.' : r.instant?.bookingId && r.status === 'confirmed' ? 'Booked and paid. Your stay is confirmed.' : fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
     <div class="confirmation-code">${e(r.id)}</div>
     ${fresh ? '<p class="req-keep">Keep this reference. With it and your phone number you can find this booking on any phone.</p>' : ''}
     ${r.status !== 'cancelled' ? alertsButton('outline-button req-alerts-panel') : ''}
@@ -259,6 +278,7 @@ function summaryText(r) {
   if (payState(r) === 'due') { lines.push('', `Payment due: ${payMoney(r.payment.amount, r.payment.currency)}`); if (r.payment.link) lines.push(`Pay online: ${r.payment.link}`); if (r.payment.note) lines.push(`How to pay: ${r.payment.note}`); }
   if (payState(r) === 'paid') lines.push('', `Paid: ${payMoney(r.payment.amount, r.payment.currency)}${r.payment.paidAt ? ' on ' + dateOf(r.payment.paidAt) : ''}`);
   if (r.instant?.bookingId) lines.push(`Booking number: ${r.instant.bookingId}`, `Hotel confirmation: ${r.instant.confirmation || 'pending'}`);
+  if (r.instant?.pnr) lines.push(`Airline booking reference: ${r.instant.pnr}`, ...(r.instant.tickets || []).map((t, i) => `E-ticket ${i + 1}: ${t}`));
   if (r.documents?.length) { lines.push('', 'Travel documents:'); for (const x of r.documents) lines.push(`- ${x.label}: ${x.url}`); }
   lines.push('', `Name: ${r.name}`, `Phone / WhatsApp: ${r.phone}`);
   if (r.email) lines.push(`Email: ${r.email}`);
@@ -400,7 +420,7 @@ export function mountStaff(main) {
     return `<article class="staff-card ${e(r.status)}">
       <div class="staff-card-top"><span class="req-status ${e(r.status)}">${st[0]}</span>${pay?.status === 'due' ? '<span class="req-status pay-due">Payment due</span>' : pay?.status === 'paid' ? '<span class="req-status paid">Paid</span>' : ''}${r.created > seen ? '<span class="staff-new">NEW</span>' : ''}<b>${e(r.id)}</b><time datetime="${new Date(r.created).toISOString()}">${ago(r.created)}</time></div>
       <h3>${e(r.title)}</h3>
-      ${r.instant ? `<p class="staff-alert ${r.instant.bookingId ? '' : 'bad'}">${r.instant.bookingId ? `${ic('check')} Booked and paid automatically · booking ${e(r.instant.bookingId)}${r.instant.confirmation ? ' · hotel ' + e(r.instant.confirmation) : ''}${r.instant.sandbox ? ' · TEST' : ''}` : `${ic('info')} Instant booking failed: ${e(r.instant.error || 'unknown')}. The customer was not charged. Offer an alternative.`}</p>` : ''}
+      ${r.instant ? staffInstant(r) : ''}
       <p class="staff-meta">${KIND[r.kind] || 'TRIP'}${r.details ? ' · ' + e(r.details) : ''}</p>
       ${r.kind === 'umrah' ? breakdownList(r) : r.chosen ? `<p class="staff-meta staff-chosen"><b>Picked:</b> ${e(r.chosen)}</p>` : ''}
       <p class="staff-meta">${datesOf(r)} · ${people(r)}${r.market ? ' · ' + e(r.market) + ' market' : ''}</p>
