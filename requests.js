@@ -97,7 +97,7 @@ function breakdownList(r) {
   const e = d.esc;
   return `<ul class="req-breakdown">${r.breakdown.map((b) => `<li><span><b>${e(b.label)}</b>${e(b.text)}</span>${b.amount ? `<b>${liveMoney(b.amount, b.currency || r.seen?.currency)}</b>` : ''}</li>`).join('')}</ul>`;
 }
-function mergeRequest(r) {
+export function mergeRequest(r) {
   d.state.requests = [r, ...d.state.requests.filter((x) => x.recordId !== r.recordId)].sort((a, b) => b.created - a.created);
   d.onChange?.();
 }
@@ -200,6 +200,16 @@ function paymentBlock(r) {
   </div>`;
 }
 
+function instantBlock(r) {
+  const x = r.instant, e = d.esc;
+  if (!x || !x.bookingId) return '';
+  return `<div class="req-docs req-instant"><span class="eyebrow">BOOKED INSTANTLY${x.sandbox ? ' · TEST MODE' : ''}</span><ul>
+    <li><span>Booking number</span><b>${e(x.bookingId)}</b></li>
+    <li><span>Hotel confirmation</span><b>${x.confirmation ? e(x.confirmation) : 'On its way from the hotel'}</b></li>
+    <li><span>Cancellation</span><b>${x.refundable ? `Free${x.freeCancelUntil ? ' until ' + e(String(x.freeCancelUntil).slice(0, 10)) : ''}` : 'Non-refundable'}</b></li>
+  </ul>${x.confirmation ? '' : `<button class="text-button" data-action="req-instant-refresh" data-id="${e(r.recordId)}">Check for the hotel’s confirmation</button>`}</div>`;
+}
+
 function documentsBlock(r) {
   if (!Array.isArray(r.documents) || !r.documents.length) return '';
   const e = d.esc, ic = d.icon;
@@ -211,14 +221,15 @@ export function showRequest(r, fresh = false) {
   const open = (r.status === 'new' || r.status === 'in_progress') && payState(r) !== 'paid';
   d.openModal(`<div class="success-panel req-panel">
     <div class="success-icon">${ic(r.status === 'cancelled' ? 'x' : 'check')}</div>
-    <span class="eyebrow">${fresh ? 'REQUEST SENT' : `YOUR ${KIND[r.kind] || 'TRIP'} REQUEST`}</span>
+    <span class="eyebrow">${r.instant?.bookingId ? `YOUR ${KIND[r.kind] || 'TRIP'} BOOKING` : fresh ? 'REQUEST SENT' : `YOUR ${KIND[r.kind] || 'TRIP'} REQUEST`}</span>
     <h2 id="modalTitle">${fresh ? `Thank you, ${e(firstName(r.name))}.` : e(r.title)}</h2>
-    <p>${fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
+    <p>${r.instant?.bookingId && r.status === 'confirmed' ? 'Booked and paid. Your stay is confirmed.' : fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
     <div class="confirmation-code">${e(r.id)}</div>
     ${fresh ? '<p class="req-keep">Keep this reference. With it and your phone number you can find this booking on any phone.</p>' : ''}
     ${r.status !== 'cancelled' ? alertsButton('outline-button req-alerts-panel') : ''}
     <span class="req-status ${e(r.status)}">${label}</span>${payState(r) === 'due' ? '<span class="req-status pay-due">Payment due</span>' : payState(r) === 'paid' ? '<span class="req-status paid">Paid</span>' : ''}
     ${r.customerMessage ? `<div class="req-message"><span class="eyebrow">MESSAGE FROM UNIWORLD</span><p>${e(r.customerMessage)}</p></div>` : ''}
+    ${instantBlock(r)}
     ${paymentBlock(r)}
     ${documentsBlock(r)}
     <div class="booking-facts"><strong>${e(r.title)}</strong>${r.details ? `<p>${e(r.details)}</p>` : ''}${r.kind === 'umrah' ? breakdownList(r) : r.chosen ? `<p>${e(r.chosen)}</p>` : ''}<p>${datesOf(r)} · ${people(r)}</p>${p ? `<p>${p.label}: <b>${p.value}</b>${p.extra ? ` · ${p.extra}` : ''}</p>` : ''}<small>${e(r.name)} · ${e(r.phone)}${r.email ? ' · ' + e(r.email) : ''}</small></div>
@@ -247,6 +258,7 @@ function summaryText(r) {
   if (p) lines.push(`${p.label}: ${p.value}${p.extra ? ' (' + p.extra + ')' : ''}`);
   if (payState(r) === 'due') { lines.push('', `Payment due: ${payMoney(r.payment.amount, r.payment.currency)}`); if (r.payment.link) lines.push(`Pay online: ${r.payment.link}`); if (r.payment.note) lines.push(`How to pay: ${r.payment.note}`); }
   if (payState(r) === 'paid') lines.push('', `Paid: ${payMoney(r.payment.amount, r.payment.currency)}${r.payment.paidAt ? ' on ' + dateOf(r.payment.paidAt) : ''}`);
+  if (r.instant?.bookingId) lines.push(`Booking number: ${r.instant.bookingId}`, `Hotel confirmation: ${r.instant.confirmation || 'pending'}`);
   if (r.documents?.length) { lines.push('', 'Travel documents:'); for (const x of r.documents) lines.push(`- ${x.label}: ${x.url}`); }
   lines.push('', `Name: ${r.name}`, `Phone / WhatsApp: ${r.phone}`);
   if (r.email) lines.push(`Email: ${r.email}`);
@@ -316,6 +328,11 @@ async function onClick(ev) {
   if (!r) return;
   if (a === 'req-view') showRequest(r);
   else if (a === 'req-summary') { download(`Uniworld-${r.id}.txt`, summaryText(r)); d.toast('Your request summary is ready.'); }
+  else if (a === 'req-instant-refresh') {
+    b.disabled = true;
+    try { const x = await d.api('instant/hotel/status/' + r.recordId); mergeRequest(x); showRequest(x); d.toast(x.instant?.confirmation ? 'The hotel has confirmed your booking.' : 'The hotel hasn’t sent its number yet. Your booking is confirmed either way.'); }
+    catch (ex) { d.toast(ex.message); b.disabled = false; }
+  }
   else if (a === 'req-cancel') d.openModal(`<div class="modal-body"><h2 id="modalTitle">Cancel this request?</h2><p>${e(r.title)} · ${e(r.id)}</p><p>The Uniworld team will see that you cancelled it. Nothing has been charged.</p><button class="dark-button" data-action="req-cancel-yes" data-id="${e(r.recordId)}">Yes, cancel request</button><button class="text-button" data-action="req-view" data-id="${e(r.recordId)}">Keep my request</button><p class="form-error" id="cancelError" role="alert"></p></div>`, true);
   else if (a === 'req-cancel-yes') {
     b.disabled = true;
@@ -383,6 +400,7 @@ export function mountStaff(main) {
     return `<article class="staff-card ${e(r.status)}">
       <div class="staff-card-top"><span class="req-status ${e(r.status)}">${st[0]}</span>${pay?.status === 'due' ? '<span class="req-status pay-due">Payment due</span>' : pay?.status === 'paid' ? '<span class="req-status paid">Paid</span>' : ''}${r.created > seen ? '<span class="staff-new">NEW</span>' : ''}<b>${e(r.id)}</b><time datetime="${new Date(r.created).toISOString()}">${ago(r.created)}</time></div>
       <h3>${e(r.title)}</h3>
+      ${r.instant ? `<p class="staff-alert ${r.instant.bookingId ? '' : 'bad'}">${r.instant.bookingId ? `${ic('check')} Booked and paid automatically · booking ${e(r.instant.bookingId)}${r.instant.confirmation ? ' · hotel ' + e(r.instant.confirmation) : ''}${r.instant.sandbox ? ' · TEST' : ''}` : `${ic('info')} Instant booking failed: ${e(r.instant.error || 'unknown')}. The customer was not charged. Offer an alternative.`}</p>` : ''}
       <p class="staff-meta">${KIND[r.kind] || 'TRIP'}${r.details ? ' · ' + e(r.details) : ''}</p>
       ${r.kind === 'umrah' ? breakdownList(r) : r.chosen ? `<p class="staff-meta staff-chosen"><b>Picked:</b> ${e(r.chosen)}</p>` : ''}
       <p class="staff-meta">${datesOf(r)} · ${people(r)}${r.market ? ' · ' + e(r.market) + ' market' : ''}</p>

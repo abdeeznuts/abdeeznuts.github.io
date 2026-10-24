@@ -230,3 +230,4 @@
 .ap-main b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-main small{font-size:10px;color:#6f8573;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-list code{font-family:inherit;font-weight:700;font-size:11px;background:#eef3ee;border-radius:6px;padding:3px 6px;letter-spacing:.5px;flex-shrink:0}
+.ls-instant{display:block;color:#2f6b45!important;font-weight:600;margin:4px 0 6px}

@@ -32,7 +32,7 @@ function build(j) {
     list.push(e); byCode.set(code, e);
     // Cities for hotel searches: one entry per city, from its biggest airport.
     const cityKey = fold(e.city) + '|' + cc;
-    if (e.city && rank < 2 && !cities.has(cityKey)) cities.set(cityKey, { city: e.city.replace(/\s*\(.*\)$/, ''), country: e.country, rank, key: fold(`${e.city} ${e.country}`) });
+    if (e.city && rank < 2 && !cities.has(cityKey)) cities.set(cityKey, { city: e.city.replace(/\s*\(.*\)$/, ''), country: e.country, cc, rank, key: fold(`${e.city} ${e.country}`) });
   }
   return { list, byCode, cities: [...cities.values()] };
 }
@@ -64,6 +64,16 @@ export function searchAirports(text, limit = 8) {
   }
   scored.sort((a, b) => b[0] - a[0] || a[1].rank - b[1].rank || a[1].code.localeCompare(b[1].code));
   return scored.slice(0, limit).map((x) => x[1]);
+}
+
+// "Tokyo, Japan" -> { city: 'Tokyo', cc: 'JP' } (for booking partners that need a country code).
+export function cityLookup(text) {
+  if (!world) return null;
+  const [cityPart, ...rest] = String(text || '').split(',');
+  const city = fold(cityPart).trim(), country = fold(rest.join(',')).trim();
+  if (!city) return null;
+  const hit = world.cities.find((c) => fold(c.city) === city && (!country || fold(c.country) === country));
+  return hit ? { city: hit.city, cc: hit.cc } : null;
 }
 
 export function searchCities(text, extra = [], limit = 8) {

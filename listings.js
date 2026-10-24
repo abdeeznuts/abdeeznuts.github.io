@@ -2,26 +2,34 @@
 // from Google Flights, through Uniworld's price service. Every result can be booked
 // with a request to a Uniworld advisor (no payment in the app).
 import { fetchLive, money, parseAirport, sameAirports, AIRPORTS } from './live-rates.js';
-import { loadWorld, airportByCode, labelOf } from './places.js';
+import { loadWorld, airportByCode, labelOf, cityLookup } from './places.js';
+import { openInstant, instantOn } from './instant.js';
 
 let d = null; // helpers from app.js: openModal, openRequest, esc, icon, state, toast
 
 // Popular places. Makkah and Madinah search close to the two holy mosques.
 export const PLACES = [
-  { label: 'Makkah', sub: 'Near the Haram', q: 'Hotels near Masjid al-Haram Makkah', image: '/assets/makkah.webp' },
-  { label: 'Madinah', sub: 'Near the Prophet’s Mosque', q: 'Hotels near Masjid an-Nabawi Madinah' },
-  { label: 'Dubai', q: 'Hotels in Dubai', image: 'https://images.unsplash.com/photo-1512453979798-5ea266f8880c?auto=format&fit=crop&w=600&q=80' },
-  { label: 'Istanbul', q: 'Hotels in Istanbul', image: 'https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?auto=format&fit=crop&w=600&q=80' },
-  { label: 'London', q: 'Hotels in London', image: 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=600&q=80' },
-  { label: 'Hunza', q: 'Hotels in Hunza', image: 'assets/hunza.webp' },
-  { label: 'Maldives', q: 'Resorts in Maldives', image: '/assets/maldives.webp' },
-  { label: 'Lahore', q: 'Hotels in Lahore' },
-  { label: 'Islamabad', q: 'Hotels in Islamabad' },
-  { label: 'Karachi', q: 'Hotels in Karachi' },
-  { label: 'Bali', q: 'Hotels in Bali' },
-  { label: 'Santorini', q: 'Hotels in Santorini' },
-  { label: 'New York', q: 'Hotels in New York' },
+  { label: 'Makkah', sub: 'Near the Haram', q: 'Hotels near Masjid al-Haram Makkah', image: '/assets/makkah.webp', at: { lat: 21.4225, lng: 39.8262, radius: 1500 } },
+  { label: 'Madinah', sub: 'Near the Prophet’s Mosque', q: 'Hotels near Masjid an-Nabawi Madinah', at: { lat: 24.4672, lng: 39.6111, radius: 1500 } },
+  { label: 'Dubai', q: 'Hotels in Dubai', image: 'https://images.unsplash.com/photo-1512453979798-5ea266f8880c?auto=format&fit=crop&w=600&q=80', at: { city: 'Dubai', cc: 'AE' } },
+  { label: 'Istanbul', q: 'Hotels in Istanbul', image: 'https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?auto=format&fit=crop&w=600&q=80', at: { city: 'Istanbul', cc: 'TR' } },
+  { label: 'London', q: 'Hotels in London', image: 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=600&q=80', at: { city: 'London', cc: 'GB' } },
+  { label: 'Hunza', q: 'Hotels in Hunza', image: 'assets/hunza.webp', at: { lat: 36.3167, lng: 74.65, radius: 20000 } },
+  { label: 'Maldives', q: 'Resorts in Maldives', image: '/assets/maldives.webp', at: { lat: 4.1755, lng: 73.5093, radius: 30000 } },
+  { label: 'Lahore', q: 'Hotels in Lahore', at: { city: 'Lahore', cc: 'PK' } },
+  { label: 'Islamabad', q: 'Hotels in Islamabad', at: { city: 'Islamabad', cc: 'PK' } },
+  { label: 'Karachi', q: 'Hotels in Karachi', at: { city: 'Karachi', cc: 'PK' } },
+  { label: 'Bali', q: 'Hotels in Bali', at: { lat: -8.6705, lng: 115.2126, radius: 30000 } },
+  { label: 'Santorini', q: 'Hotels in Santorini', at: { lat: 36.4166, lng: 25.4316, radius: 12000 } },
+  { label: 'New York', q: 'Hotels in New York', at: { city: 'New York', cc: 'US' } },
 ];
+// Where to look for bookable rooms (instant booking): coordinates or a city with its country code.
+function instantPlace(label) {
+  const p = PLACES.find((x) => x.label.toLowerCase() === String(label).trim().toLowerCase());
+  if (p?.at) return p.at;
+  const c = cityLookup(label);
+  return c ? { city: c.city, cc: c.cc } : null;
+}
 export const placeQuery = (dest) => PLACES.find((p) => p.label.toLowerCase() === String(dest).trim().toLowerCase())?.q || String(dest).trim();
 
 export function initListings(deps) {
@@ -52,7 +60,7 @@ function toggleSave(h, st) {
   });
   d.toast(on ? 'Saved to your wish list in My trips.' : 'Removed from your wish list.');
 }
-const heart = (h, cls, withText = false) => h.token ? `<button type="button" class="${cls} ${isSaved(h) ? 'saved' : ''}" data-save-token="${d.esc(h.token)}" aria-pressed="${isSaved(h)}" aria-label="${isSaved(h) ? 'Remove' : 'Save'} ${d.esc(h.name)} ${isSaved(h) ? 'from' : 'to'} your wish list">${d.icon('heart')}${withText ? `<span class="ls-save-text">${isSaved(h) ? 'Saved' : 'Save'}</span>` : ''}</button>` : '';
+const heart = (h, cls, withText = false) => h.token && !h.instant ? `<button type="button" class="${cls} ${isSaved(h) ? 'saved' : ''}" data-save-token="${d.esc(h.token)}" aria-pressed="${isSaved(h)}" aria-label="${isSaved(h) ? 'Remove' : 'Save'} ${d.esc(h.name)} ${isSaved(h) ? 'from' : 'to'} your wish list">${d.icon('heart')}${withText ? `<span class="ls-save-text">${isSaved(h) ? 'Saved' : 'Save'}</span>` : ''}</button>` : '';
 
 // Open a saved hotel with today's dates and live prices.
 export function openSavedHotel(x) {
@@ -173,6 +181,25 @@ async function load(root, st, more) {
   if (!more) { st.hotels = []; st.next = null; list.innerHTML = skeletonCards(3) + `<p class="ls-wait" role="status">Finding real hotels in ${d.esc(st.label)}…</p>`; moreWrap.innerHTML = ''; }
   else moreWrap.innerHTML = `<p class="ls-wait" role="status">Loading more stays…</p>`;
   const slow = setTimeout(() => { const w = root.querySelector('.ls-wait'); if (w) w.textContent = 'Checking hundreds of hotels. This can take a few seconds…'; }, 5000);
+  if (!more && instantOn()) {
+    await loadWorld();
+    const at = instantPlace(st.label);
+    if (at) {
+      try {
+        const res = await fetchLive({ kind: 'instant-hotels', ...(at.lat !== undefined ? { lat: at.lat, lng: at.lng, radius: at.radius } : { city: at.city, countryCode: at.cc }), checkIn: st.checkIn, checkOut: st.checkOut, adults: Math.min(st.adults, 8), currency: cur(), stars: filters.stars.length ? filters.stars : undefined });
+        if (!st.alive || seq !== st.seq) { clearTimeout(slow); return; }
+        if (res.data?.hotels?.length) {
+          Object.assign(st, { instant: true, all: res.data.hotels, next: null, link: null, fetchedAt: res.fetchedAt, notice: null, currency: res.currency, sandbox: !!res.sandbox });
+          st.hotels = instantView(st);
+          render(root, st);
+          clearTimeout(slow);
+          st.loading = false;
+          return;
+        }
+      } catch { /* fall back to Google Hotels below */ }
+    }
+  }
+  st.instant = false;
   try {
     const res = await fetchLive({
       kind: 'hotels', q: st.q, checkIn: st.checkIn, checkOut: st.checkOut, adults: st.adults, currency: cur(),
@@ -202,12 +229,23 @@ async function load(root, st, more) {
   }
 }
 
+// Instant results are sorted and filtered here (the booking partner returns them all at once).
+function instantView(st) {
+  const min = Number(filters.minPrice) || 0, max = Number(filters.maxPrice) || Infinity, minRating = { 7: 3.5, 8: 4, 9: 4.5 }[filters.rating] || 0;
+  let list = st.all.filter((h) => h.pricePerNight >= min && h.pricePerNight <= max && (!minRating || (h.rating ?? 0) >= minRating) && (!filters.freeCancellation || h.offers.some((o) => o.refundable)));
+  if (filters.sort === 'price') list = [...list].sort((a, b) => a.total - b.total);
+  else if (filters.sort === 'rating') list = [...list].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+  else if (filters.sort === 'reviews') list = [...list].sort((a, b) => (b.reviews ?? 0) - (a.reviews ?? 0));
+  return list;
+}
+
 function render(root, st) {
   const list = root.querySelector('.ls-list'), moreWrap = root.querySelector('.ls-more-wrap'), foot = root.querySelector('.ls-foot');
   if (!list) return;
   if (!st.hotels.length) { list.innerHTML = noticeCard(st.notice || 'empty'); moreWrap.innerHTML = ''; foot.textContent = ''; return; }
   list.innerHTML = (st.notice === 'partial' ? `<p class="ls-stale">${noticeText.partial[0]} ${noticeText.partial[1]}</p>` : '') + st.hotels.map((h, i) => hotelCard(h, i, st)).join('');
   moreWrap.innerHTML = st.next ? `<button class="outline-button ls-more" data-ls="more">Show more stays</button>` : '';
+  if (st.instant) { foot.innerHTML = `${plural(st.hotels.length, 'stay')} you can book right now with instant confirmation. Prices are the total for ${plural(st.nights, 'night')} and ${plural(st.adults, 'adult')}, in ${d.esc(st.currency || cur())}, including taxes charged through us.${st.sandbox ? ' <b>Test mode: no real bookings.</b>' : ''}`; return; }
   foot.innerHTML = `${plural(st.hotels.length, 'stay')} · live from Google Hotels, checked ${d.esc(ago(st.fetchedAt))}. Prices per night for ${plural(st.adults, 'adult')}, in ${d.esc(st.currency || cur())}. A Uniworld advisor confirms the final price before you pay.${st.link ? ` <a href="${d.esc(st.link)}" target="_blank" rel="noopener">See on Google Hotels ↗</a>` : ''}`;
 }
 
@@ -226,9 +264,9 @@ function hotelCard(h, i, st) {
     </div>
     <div class="ls-price">
       <small>${plural(st.nights, 'night')}, ${plural(st.adults, 'adult')}</small>
-      <strong>${money(h.pricePerNight, cur)}</strong><small>per night</small>
-      ${h.total ? `<small class="ls-total">${money(h.total, cur)} total</small>` : ''}
-      <button class="dark-button compact" data-ls="book" data-i="${i}">Book</button>
+      ${h.instant ? `<strong>${money(h.total, cur)}</strong><small>total · ${money(h.pricePerNight, cur)} a night</small>` : `<strong>${money(h.pricePerNight, cur)}</strong><small>per night</small>`}
+      ${h.total && !h.instant ? `<small class="ls-total">${money(h.total, cur)} total</small>` : ''}
+      ${h.instant ? `<small class="ls-instant">${h.offers.some((o) => o.refundable) ? 'Free cancellation available' : 'Instant confirmation'}</small><button class="dark-button compact" data-ls="instant" data-i="${i}">Book now</button>` : `<button class="dark-button compact" data-ls="book" data-i="${i}">Book</button>`}
     </div>
   </article>`;
 }
@@ -240,9 +278,10 @@ function stayAction(ev, root, st) {
   if (!b) return;
   const a = b.dataset.ls;
   if (a === 'place') { d.goStays?.(b.dataset.place); return; }
-  if (a === 'open') openHotel(st.hotels[Number(b.dataset.i)], st);
+  if (a === 'instant' || (a === 'open' && st.instant)) openInstant(st.hotels[Number(b.dataset.i)], st);
+  else if (a === 'open') openHotel(st.hotels[Number(b.dataset.i)], st);
   else if (a === 'book') bookHotel(st.hotels[Number(b.dataset.i)], st);
-  else if (a === 'sort') { filters.sort = b.dataset.sort; root.querySelectorAll('[data-ls=sort]').forEach((x) => { const on = x === b; x.classList.toggle('active', on); x.setAttribute('aria-pressed', String(on)); }); load(root, st, false); }
+  else if (a === 'sort') { filters.sort = b.dataset.sort; root.querySelectorAll('[data-ls=sort]').forEach((x) => { const on = x === b; x.classList.toggle('active', on); x.setAttribute('aria-pressed', String(on)); }); if (st.instant) { st.hotels = instantView(st); render(root, st); } else load(root, st, false); }
   else if (a === 'filters') { const f = root.querySelector('#lsFilters'); f.hidden = !f.hidden; b.setAttribute('aria-expanded', String(!f.hidden)); }
   else if (a === 'clear') { filters = { ...FILTERS, stars: [], sort: filters.sort }; root.innerHTML = shell(st); load(root, st, false); }
   else if (a === 'more') load(root, st, true);
