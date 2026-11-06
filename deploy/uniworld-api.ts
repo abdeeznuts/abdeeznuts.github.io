@@ -369,6 +369,74 @@ function holderFrom(v: any) {
   return { firstName, lastName, email, phone };
 }
 
+// ---------- Instant flight booking (Nuitée Connect): the same LITEAPI_KEY as hotels ----------
+// The traveler pays on Nuitée's secure card form (Nuitée is the merchant of record, like hotels).
+// The app then confirms the booking with the airline. Nuitée's booking call is idempotent per
+// prebook, so retrying it never books twice. If it can't be confirmed after payment, the request
+// is marked "in progress" and the team is alerted to finish it with Nuitée.
+const LITEAPI_V3 = 'https://api.liteapi.travel/v3.0';
+async function nuitee(path: string, payload?: unknown, timeoutMs = 45000) {
+  const key = Deno.env.get('LITEAPI_KEY');
+  if (!key) throw new HttpError('Instant flight booking isn’t switched on yet. Send a request instead.', 503);
+  let res: Response;
+  try {
+    res = await fetch(LITEAPI_V3 + path, { method: payload === undefined ? 'GET' : 'POST', headers: { 'X-API-Key': key, 'Content-Type': 'application/json', Accept: 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) { return { ok: false, status: 0, json: null as any }; }
+  const json: any = await res.json().catch(() => null);
+  return { status: res.status, ok: res.ok && !!json?.data, json };
+}
+const nuiteeSandbox = () => (Deno.env.get('LITEAPI_KEY') ?? '').startsWith('sand_');
+// ITU country calling codes are prefix-free: 1 and 7 are one digit, these are two digits, the rest three.
+const CALLING_2 = new Set('20 27 30 31 32 33 34 36 39 40 41 43 44 45 46 47 48 49 51 52 53 54 55 56 57 58 60 61 62 63 64 65 66 81 82 84 86 90 91 92 93 94 95 98'.split(' '));
+function phoneParts(e164number: string) {
+  const d = e164number.replace(/\D/g, '');
+  const cc = d[0] === '1' || d[0] === '7' ? d.slice(0, 1) : CALLING_2.has(d.slice(0, 2)) ? d.slice(0, 2) : d.slice(0, 3);
+  return { cc, number: d.slice(cc.length) };
+}
+function ageOn(born: string, day: string) {
+  const [by, bm, bd] = born.split('-').map(Number), [y, m, d] = day.split('-').map(Number);
+  return y - by - (m < bm || (m === bm && d < bd) ? 1 : 0);
+}
+const PAX_TYPES: Record<string, number> = { adult: 0, child: 1, infant: 2 };
+// Travelers exactly as on their passports. Adults are 12+, children 2–11 and infants under 2 on the day of travel.
+function nuiteeTravelers(list: any, counts: { adults: number; children: number; infants: number }, departs: string, lastDay: string) {
+  const want = counts.adults + counts.children + counts.infants;
+  if (!Array.isArray(list) || list.length !== want) throw new HttpError('Please fill in every traveler.');
+  const today = new Date().toISOString().slice(0, 10);
+  const seen = { adult: 0, child: 0, infant: 0 } as Record<string, number>;
+  const people = list.map((p: any, i: number) => {
+    const who = `traveler ${i + 1}`;
+    const type = String(p?.type ?? 'adult');
+    if (!(type in PAX_TYPES)) throw new HttpError(`Choose adult, child or infant for ${who}.`);
+    seen[type]++;
+    const firstName = safe(p?.firstName, 60), lastName = safe(p?.lastName, 60), birthday = safe(p?.bornOn, 10);
+    if (!firstName || !lastName) throw new HttpError(`Enter ${who}’s first and last name exactly as on the passport.`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday) || birthday >= today || birthday < '1900-01-01') throw new HttpError(`Enter ${who}’s date of birth.`);
+    const age = ageOn(birthday, departs);
+    if (type === 'adult' && age < 12) throw new HttpError(`${firstName} is under 12 on the travel date, so add them as a child.`);
+    if (type === 'child' && (age < 2 || age > 11)) throw new HttpError(`${firstName} must be 2–11 on the travel date to travel as a child.`);
+    if (type === 'infant' && ageOn(birthday, lastDay) >= 2) throw new HttpError(`${firstName} must be under 2 for the whole trip to travel as an infant.`);
+    const gender = p?.gender === 'm' || p?.gender === 'M' ? 'M' : p?.gender === 'f' || p?.gender === 'F' ? 'F' : '';
+    if (!gender) throw new HttpError(`Choose ${who}’s gender as shown on the passport.`);
+    const nationality = String(p?.nationality ?? '').toUpperCase();
+    if (!/^[A-Z]{2}$/.test(nationality)) throw new HttpError(`Choose ${who}’s nationality.`);
+    const title = type === 'adult' && ['MR', 'MS', 'MRS', 'MISS'].includes(String(p?.title ?? '').toUpperCase()) ? String(p.title).toUpperCase() : undefined;
+    const pax: any = { firstName, lastName, birthday, gender, nationality, passengerType: PAX_TYPES[type], ...(title ? { title } : {}) };
+    if (p?.passport && (p.passport.number || p.passport.expires)) {
+      const number = safe(p.passport.number, 20).replace(/\s+/g, '').toUpperCase(), country = String(p.passport.country ?? '').toUpperCase(), expires = safe(p.passport.expires, 10);
+      if (!/^[A-Z0-9]{5,20}$/.test(number)) throw new HttpError(`Check ${who}’s passport number.`);
+      if (!/^[A-Z]{2}$/.test(country)) throw new HttpError(`Choose the country that issued ${who}’s passport.`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(expires) || expires <= lastDay) throw new HttpError(`${firstName}’s passport must be valid after the trip ends.`);
+      Object.assign(pax, { documentType: 'passport', documentNumber: number, documentIssueCountry: country, documentExpiry: expires });
+    }
+    return pax;
+  });
+  if (seen.adult !== counts.adults || seen.child !== counts.children || seen.infant !== counts.infants) throw new HttpError('The travelers don’t match the search. Please search again with the right number of adults, children and infants.');
+  return people;
+}
+const nuiteeBooking = (json: any) => json?.data?.[0]?.booking ?? json?.data?.booking ?? null;
+const nuiteePnrs = (b: any) => (Array.isArray(b?.airlineLocators) ? b.airlineLocators : []).map((l: any) => [l.airlineCode, l.airlinePnr].filter(Boolean).join(' ')).filter(Boolean).slice(0, 6);
+
 // ---------- Instant flight booking (Duffel + Stripe): the app tickets the flight after card payment ----------
 // Off until DUFFEL_ACCESS_TOKEN and STRIPE_SECRET_KEY exist. The customer pays on Stripe's checkout page;
 // the app then buys the ticket from the Duffel balance. If ticketing fails, the payment is refunded in
@@ -767,7 +835,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.5';
+const BUILD = '2026-11-06.1';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -878,7 +946,7 @@ Deno.serve(async (req) => {
         favorites: (rows.find((r: any) => r.kind === 'favorites') as any)?.body ?? [],
         savedHotels: (rows.find((r: any) => r.kind === 'saved-hotels') as any)?.body ?? [],
         contact: { whatsapp: (await readSettings(records)).whatsapp },
-        instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: flightModes().on },
+        instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: !!Deno.env.get('LITEAPI_KEY') || flightModes().on, flightProvider: Deno.env.get('LITEAPI_KEY') ? 'nuitee' : flightModes().on ? 'duffel' : null },
         aiMode: 'on-device',
         displayName: 'This device',
       }, 200, origin);
@@ -1048,6 +1116,142 @@ Deno.serve(async (req) => {
       const x = r.json.data, record = { ...row.body, instant: { ...row.body.instant, status: String(x.status ?? row.body.instant.status), confirmation: x.hotelConfirmationCode ? String(x.hotelConfirmationCode) : row.body.instant.confirmation } };
       if (/CANCEL/i.test(record.instant.status) && record.status !== 'cancelled') { record.status = 'cancelled'; record.history = [...(record.history ?? []), { at: Date.now(), status: 'cancelled', by: 'hotel' }]; }
       if (JSON.stringify(record.instant) !== JSON.stringify(row.body.instant)) { record.updated = Date.now(); await records().update({ body: record }).eq('id', row.id); }
+      return json(forCustomer(record), 200, origin);
+    }
+    // ----- Instant flight booking (Nuitée Connect) -----
+    if (path[0] === 'instant' && path[1] === 'nflight' && path[2] === 'prebook' && method === 'POST') {
+      const input = await body(req);
+      if (!UUID.test(input.requestId || '')) throw new HttpError('Please start again.');
+      const requestId = String(input.requestId).toLowerCase(), offerId = String(input.offerId ?? '');
+      if (!/^[A-Za-z0-9+/=_-]{20,4000}$/.test(offerId)) throw new HttpError('Choose a flight first.');
+      if (input.consent !== true) throw new HttpError('Please tick the box to continue.');
+      const holdKey = owner + ':nflight:' + requestId;
+      const earlier = await records().select('body').eq('id', holdKey).maybeSingle();
+      if (earlier.data?.body?.done) throw new HttpError('This booking is already finished. Check My trips.', 409);
+      const t0 = input.trip ?? {};
+      const counts = { adults: int(t0.adults ?? 1, 1, 9), children: int(t0.children ?? 0, 0, 8), infants: int(t0.infants ?? 0, 0, 4) };
+      const contactIn = holderFrom({ firstName: 'x', lastName: 'x', email: input.contact?.email, phone: input.contact?.phone });
+      const market = MARKETS.includes(input.market) ? input.market : 'USD', phoneE164 = e164(contactIn.phone, market);
+      if (!phoneE164) throw new HttpError('Please enter a phone number with your country code, like +92 300 1234567.');
+      // 1. Is the fare still there, and at what price?
+      const v = await nuitee('/flights/verify', { offerId }, 30000);
+      if (v.status === 404) throw new HttpError('This fare is no longer available. Please search again.', 409);
+      if (!v.ok) { console.error('nuitee verify', v.status, liteError(v.json)); throw new HttpError('We couldn’t check this fare with the airline just now. Please try again.', 503); }
+      const vj = v.json.data[0]?.journey ?? v.json.data[0] ?? {};
+      const price = Number(vj?.pricing?.display?.total), currency = String(vj?.pricing?.display?.currency ?? '').toUpperCase();
+      if (!(price > 0) || !/^[A-Z]{3}$/.test(currency)) throw new HttpError('We couldn’t check this fare with the airline just now. Please try again.', 503);
+      const shown = Number(input.acceptPrice ?? t0.price);
+      if (!(shown > 0) || price > shown + 0.5) return json({ priceChanged: true, oldPrice: shown > 0 ? shown : null, newPrice: price, currency }, 200, origin);
+      const segs = Array.isArray(vj.segments) ? vj.segments : [];
+      const outSegs = segs.filter((g: any) => String(g.direction || 'OUTBOUND').toUpperCase() !== 'INBOUND'), inSegs = segs.filter((g: any) => String(g.direction || '').toUpperCase() === 'INBOUND');
+      const departs = String(outSegs[0]?.departureTime ?? t0.depart ?? '').slice(0, 10), lastDay = String((inSegs.at(-1) ?? outSegs.at(-1))?.arrivalTime ?? t0.ret ?? departs).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(departs)) throw new HttpError('We couldn’t check this fare with the airline just now. Please try again.', 503);
+      const passengers = nuiteeTravelers(input.passengers, counts, departs, /^\d{4}-\d{2}-\d{2}$/.test(lastDay) ? lastDay : departs);
+      const lead = passengers.find((p: any) => p.passengerType === 0) ?? passengers[0];
+      const phone = phoneParts(phoneE164);
+      // 2. Hold the seats and open the payment.
+      const pb = await nuitee('/flights/prebooks', {
+        offerId, usePaymentSdk: true, travelPurpose: 'LEISURE',
+        contact: { email: contactIn.email, firstName: lead.firstName, lastName: lead.lastName, phoneCountryCode: phone.cc, phoneNumber: phone.number },
+        passengers, metadata: { platform: 'web', language: 'en', device_id: owner.slice(0, 60) },
+      }, 60000);
+      if (!pb.ok) {
+        console.error('nuitee prebook', pb.status, liteError(pb.json));
+        if (pb.status === 404) throw new HttpError('This fare has just sold out. Please search again.', 409);
+        if (pb.status === 400) throw new HttpError('The airline didn’t accept these traveler details: ' + (liteError(pb.json) || 'please check the names, dates and passport numbers.'), 400);
+        throw new HttpError('The airline couldn’t hold these seats just now. Please try again in a moment or choose another flight.', 503);
+      }
+      const x = pb.json.data[0] ?? pb.json.data;
+      if (!x?.prebookId || !x?.transactionId || !x?.secretKey) throw new HttpError('Card payment isn’t available for this fare. Please choose another flight.', 409);
+      const chosen = segs.map((g: any) => `${g.carrier?.marketingCode ?? ''} ${g.flight?.marketingNumber ?? ''} ${g.originCode ?? ''} ${String(g.departureTime ?? '').slice(5, 16).replace('T', ' ')} → ${g.destinationCode ?? ''} ${String(g.arrivalTime ?? '').slice(11, 16)}`.trim()).join(' · ').slice(0, 290);
+      const trip = {
+        fromLabel: safe(t0.fromLabel, 80) || outSegs[0]?.originCode || '', toLabel: safe(t0.toLabel, 80) || outSegs.at(-1)?.destinationCode || '',
+        depart: departs, ret: inSegs.length ? String(inSegs[0]?.departureTime ?? '').slice(0, 10) : '', cabin: safe(t0.cabin, 30) || 'Economy',
+        airline: [...new Set(segs.map((g: any) => g.carrier?.marketingName).filter(Boolean))].join(' + ').slice(0, 80) || 'Airline',
+        stops: Math.max(outSegs.length - 1, 0), chosen, ...counts, sandbox: nuiteeSandbox(),
+        refundable: !!(vj.terms?.refundable ?? t0.refundable), bags: vj.baggage ? { carryOn: !!vj.baggage.hasCarryOnBag, checked: !!vj.baggage.hasCheckedBag } : null,
+      };
+      const hold = {
+        requestId, offerId, prebookId: String(x.prebookId), transactionId: String(x.transactionId), price: Number(x.price ?? price), currency: String(x.currency ?? currency).toUpperCase(),
+        trip, contact: { name: `${lead.firstName} ${lead.lastName}`, email: contactIn.email, phone: contactIn.phone },
+        travelers: passengers.map((p: any) => ({ name: `${p.firstName} ${p.lastName}`, type: ['adult', 'child', 'infant'][p.passengerType] })),
+        market, note: safe(input.note, 500), created: Date.now(), done: null,
+      };
+      const { error } = await records().upsert({ id: holdKey, owner, kind: 'instant-nflight', body: hold, created: hold.created }, { onConflict: 'id' });
+      if (error) throw error;
+      return json({ prebookId: hold.prebookId, secretKey: String(x.secretKey), price: hold.price, currency: hold.currency, sandbox: trip.sandbox, priceChanged: false }, 200, origin);
+    }
+    if (path[0] === 'instant' && path[1] === 'nflight' && path[2] === 'book' && method === 'POST') {
+      const input = await body(req);
+      if (!UUID.test(input.requestId || '')) throw new HttpError('Please start again.');
+      const requestId = String(input.requestId).toLowerCase(), holdKey = owner + ':nflight:' + requestId, key = owner + ':request:' + requestId;
+      const held = await records().select('body').eq('id', holdKey).eq('owner', owner).maybeSingle();
+      if (!held.data) throw new HttpError('This booking has expired. Please choose the flight again.', 404);
+      const hold = held.data.body;
+      if (hold.done) { const done = await records().select('body').eq('id', key).maybeSingle(); if (done.data) return json(forCustomer(done.data.body), 200, origin); }
+      const recent = await records().select('created').eq('owner', owner).eq('kind', 'request').order('created', { ascending: false }).limit(15);
+      if ((recent.data ?? []).filter((x: any) => x.created > Date.now() - 86400000).length >= 15) throw new HttpError('You have made a lot of bookings today. Please call or email Uniworld instead.', 429);
+      // Nuitée's booking call is idempotent per prebook: retrying after a timeout returns the same booking.
+      let r: any = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        r = await nuitee('/flights/bookings', { prebookId: hold.prebookId, payment: { method: 'TRANSACTION_ID', transactionId: hold.transactionId }, customTags: { UNIWORLD: (await referenceFor(requestId)).replace('UW-', 'UW') }, metadata: { platform: 'web', language: 'en' } }, 60000);
+        if (r.ok || ![0, 502, 503, 504].includes(r.status)) break;
+        await new Promise((res) => setTimeout(res, 1000 * (attempt + 1)));
+      }
+      const b = r.ok ? nuiteeBooking(r.json) : null;
+      const now = Date.now(), t = hold.trip, n = t.adults + t.children + t.infants;
+      const confirmed = b && String(b.status).toUpperCase() === 'CONFIRMED';
+      const record: any = {
+        id: await referenceFor(requestId), recordId: requestId, kind: 'flight', title: `${t.fromLabel} → ${t.toLabel}`, destination: t.toLabel, image: '',
+        start: t.depart, end: t.ret || '', travelers: n, from: t.fromLabel, to: t.toLabel, oneWay: !t.ret,
+        details: `${t.cabin} · ${t.ret ? 'return' : 'one way'} · ${[t.adults && `${t.adults} adult${t.adults > 1 ? 's' : ''}`, t.children && `${t.children} child${t.children > 1 ? 'ren' : ''}`, t.infants && `${t.infants} infant${t.infants > 1 ? 's' : ''}`].filter(Boolean).join(', ')}`,
+        estimateUsd: null, seen: null, chosen: `${t.airline} · ${t.chosen}`.slice(0, 300),
+        name: hold.contact.name, phone: hold.contact.phone, email: hold.contact.email, contactBy: 'whatsapp', note: hold.note || '',
+        market: hold.market, created: now, updated: now,
+        instant: {
+          provider: 'nuitee', prebookId: hold.prebookId, bookingId: b?.bookingId ? String(b.bookingId) : null, bookingRef: b?.bookingRef ? String(b.bookingRef) : null,
+          pnrs: b ? nuiteePnrs(b) : [], status: b?.status ? String(b.status) : 'UNCONFIRMED', paymentStatus: b?.paymentStatus ? String(b.paymentStatus) : null,
+          travelers: hold.travelers, sandbox: !!t.sandbox, error: b ? null : (liteError(r?.json) || `HTTP ${r?.status ?? 0}`), unsure: !b,
+        },
+        payment: { status: 'paid', amount: Number(b?.payment?.amount ?? hold.price), currency: String(b?.payment?.currency ?? hold.currency), link: '', note: 'Paid by card in the app', dueAt: now, paidAt: now, customerSent: null },
+        staff: { note: '' },
+      };
+      if (b) {
+        Object.assign(record, {
+          status: confirmed ? 'confirmed' : 'in_progress',
+          customerMessage: confirmed
+            ? `Booked and paid in the app. Your booking reference is ${record.instant.bookingRef || record.id}${record.instant.pnrs.length ? `; the airline’s reference is ${record.instant.pnrs.join(', ')}` : ''}. Use it to check in and choose seats on the airline’s website.`
+            : `Paid. The airline is confirming your ticket now; this usually takes a few minutes. Your booking reference is ${record.instant.bookingRef || record.id}. You don’t need to pay again.`,
+          history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'payment_paid', by: 'app' }, { at: now, status: confirmed ? 'confirmed' : 'in_progress', by: 'app' }],
+        });
+      } else {
+        // Paid but not confirmed: never ask the customer to pay again; a person finishes it with Nuitée.
+        console.error('nuitee book', r?.status, record.instant.error);
+        Object.assign(record, {
+          status: 'in_progress', customerMessage: 'Your payment went through and we’re confirming your seats with the airline. A Uniworld advisor will message you shortly with your booking reference. You don’t need to pay again.',
+          history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'payment_paid', by: 'app' }, { at: now, status: 'in_progress', by: 'app' }],
+          staff: { note: `CHECK NUITÉE FIRST: the booking call failed after the card form (${record.instant.error}). In the Nuitée Connect dashboard, look up prebook ${hold.prebookId} (${hold.travelers.map((x: any) => x.name).join(', ')}, ${t.depart}). If it's booked, send the customer the reference; if not, ask Nuitée support to finish or refund it.` },
+        });
+      }
+      const { error } = await records().upsert({ id: key, owner, kind: 'request', body: record, created: now }, { onConflict: 'id' });
+      if (error) throw error;
+      await records().update({ body: { ...hold, done: now } }).eq('id', holdKey);
+      inBackground(Promise.all([notifyTeam(record), pushTeam(records, b
+        ? { title: `${confirmed ? 'Ticketed' : 'Booked, awaiting airline'} · ${record.id}`, body: `${record.name} · ${record.title} · ${record.payment.currency} ${Number(record.payment.amount).toLocaleString('en-US')} paid`, url: '/#staff', tag: record.id }
+        : { title: `Check Nuitée now · ${record.id}`, body: `${record.name} paid for ${record.title} but the booking isn’t confirmed.`, url: '/#staff', tag: record.id })]));
+      return json(forCustomer(record), b ? 201 : 202, origin);
+    }
+    if (path[0] === 'instant' && path[1] === 'nflight' && path[2] === 'status' && path[3] && method === 'GET') {
+      const row = await requestFor(records, owner, uuidParam(path[3]));
+      if (!row?.body?.instant?.bookingId || row.body.instant.provider !== 'nuitee') throw new HttpError('Booking not found.', 404);
+      const r = await nuitee('/flights/bookings/' + encodeURIComponent(row.body.instant.bookingId), undefined, 30000);
+      const b = r.ok ? nuiteeBooking(r.json) : null;
+      if (!b) return json(forCustomer(row.body), 200, origin);
+      const record = { ...row.body, instant: { ...row.body.instant, status: String(b.status ?? row.body.instant.status), bookingRef: b.bookingRef ? String(b.bookingRef) : row.body.instant.bookingRef, pnrs: nuiteePnrs(b).length ? nuiteePnrs(b) : row.body.instant.pnrs } };
+      const st = record.instant.status.toUpperCase();
+      if (st === 'CONFIRMED' && record.status === 'in_progress') { record.status = 'confirmed'; record.customerMessage = `Your flight is confirmed. Booking reference ${record.instant.bookingRef || record.id}${record.instant.pnrs.length ? `; airline reference ${record.instant.pnrs.join(', ')}` : ''}.`; record.history = [...(record.history ?? []), { at: Date.now(), status: 'confirmed', by: 'airline' }]; }
+      if (/CANCEL/.test(st) && record.status !== 'cancelled') { record.status = 'cancelled'; record.history = [...(record.history ?? []), { at: Date.now(), status: 'cancelled', by: 'airline' }]; }
+      if (JSON.stringify(record) !== JSON.stringify(row.body)) { record.updated = Date.now(); await records().update({ body: record }).eq('id', row.id); }
       return json(forCustomer(record), 200, origin);
     }
     // Find my booking: the reference plus the phone number or email used on the request.

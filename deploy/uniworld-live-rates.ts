@@ -829,10 +829,12 @@ const BIG_HUBS = ('DXB DOH IST SAW AUH SHJ JED RUH DMM MED MCT BAH KWI AMM BEY C
 async function flightHacks(kind: string, input: Record<string, unknown>, db: any, apiKey: string, origin: string | null) {
   try {
     const run = async (f: any, extra: Record<string, string> | null = null) => {
-      const key = extra ? 'hc|' + JSON.stringify([f.from, f.to, f.depart, f.adults, f.cabin, f.currency, extra]) : 'fl|' + JSON.stringify([f.from, f.to, f.depart, null, f.adults, f.cabin, f.currency]);
+      const kids = f.children || f.infants ? [f.children, f.infants] : [];
+      const key = extra ? 'hc|' + JSON.stringify([f.from, f.to, f.depart, f.adults, f.cabin, f.currency, extra, ...kids]) : 'fl|' + JSON.stringify([f.from, f.to, f.depart, null, f.adults, f.cabin, f.currency, ...kids]);
       return cachedSearch(db, apiKey, key, TTL_HOURS.list, async () => flightList(await serp({
         engine: 'google_flights', departure_id: f.from, arrival_id: f.to, outbound_date: f.depart, type: '2',
-        adults: String(f.adults), travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en', ...(extra ?? {}),
+        adults: String(f.adults), ...(f.children ? { children: String(f.children) } : {}), ...(f.infants ? { infants_on_lap: String(f.infants) } : {}),
+        travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en', ...(extra ?? {}),
       }, apiKey), f));
     };
     if (kind === 'hidden-city') {
@@ -922,7 +924,7 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-11-06.1';
+const BUILD = '2026-11-06.2';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
