@@ -835,7 +835,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-11-06.1';
+const BUILD = '2026-11-06.2';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -1189,6 +1189,9 @@ Deno.serve(async (req) => {
       if (!held.data) throw new HttpError('This booking has expired. Please choose the flight again.', 404);
       const hold = held.data.body;
       if (hold.done) { const done = await records().select('body').eq('id', key).maybeSingle(); if (done.data) return json(forCustomer(done.data.body), 200, origin); }
+      // Only book after the card form sent the customer back with its payment reference (Stripe adds it to the return address).
+      const paymentIntent = String(input.paymentIntent ?? '');
+      if (!/^pi_[A-Za-z0-9_]{3,100}$/.test(paymentIntent)) throw new HttpError('We couldn’t confirm your card payment. If your card was charged, call Uniworld and we’ll finish your booking. Don’t pay again.', 402);
       const recent = await records().select('created').eq('owner', owner).eq('kind', 'request').order('created', { ascending: false }).limit(15);
       if ((recent.data ?? []).filter((x: any) => x.created > Date.now() - 86400000).length >= 15) throw new HttpError('You have made a lot of bookings today. Please call or email Uniworld instead.', 429);
       // Nuitée's booking call is idempotent per prebook: retrying after a timeout returns the same booking.
@@ -1211,7 +1214,7 @@ Deno.serve(async (req) => {
         instant: {
           provider: 'nuitee', prebookId: hold.prebookId, bookingId: b?.bookingId ? String(b.bookingId) : null, bookingRef: b?.bookingRef ? String(b.bookingRef) : null,
           pnrs: b ? nuiteePnrs(b) : [], status: b?.status ? String(b.status) : 'UNCONFIRMED', paymentStatus: b?.paymentStatus ? String(b.paymentStatus) : null,
-          travelers: hold.travelers, sandbox: !!t.sandbox, error: b ? null : (liteError(r?.json) || `HTTP ${r?.status ?? 0}`), unsure: !b,
+          travelers: hold.travelers, sandbox: !!t.sandbox, error: b ? null : (liteError(r?.json) || `HTTP ${r?.status ?? 0}`), unsure: !b, paymentIntent,
         },
         payment: { status: 'paid', amount: Number(b?.payment?.amount ?? hold.price), currency: String(b?.payment?.currency ?? hold.currency), link: '', note: 'Paid by card in the app', dueAt: now, paidAt: now, customerSent: null },
         staff: { note: '' },
@@ -1224,20 +1227,24 @@ Deno.serve(async (req) => {
             : `Paid. The airline is confirming your ticket now; this usually takes a few minutes. Your booking reference is ${record.instant.bookingRef || record.id}. You don’t need to pay again.`,
           history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'payment_paid', by: 'app' }, { at: now, status: confirmed ? 'confirmed' : 'in_progress', by: 'app' }],
         });
+        if (/fail/i.test(String(b.paymentStatus ?? ''))) {
+          record.instant.payProblem = true;
+          record.staff = { note: `CHECK THE PAYMENT: the card form said paid (${paymentIntent}) but Nuitée reports the payment as "${b.paymentStatus}" for booking ${record.instant.bookingRef || record.instant.bookingId}. Check it in the Nuitée Connect dashboard before the customer travels.` };
+        }
       } else {
         // Paid but not confirmed: never ask the customer to pay again; a person finishes it with Nuitée.
         console.error('nuitee book', r?.status, record.instant.error);
         Object.assign(record, {
           status: 'in_progress', customerMessage: 'Your payment went through and we’re confirming your seats with the airline. A Uniworld advisor will message you shortly with your booking reference. You don’t need to pay again.',
           history: [{ at: now, status: 'new', by: 'customer' }, { at: now, status: 'payment_paid', by: 'app' }, { at: now, status: 'in_progress', by: 'app' }],
-          staff: { note: `CHECK NUITÉE FIRST: the booking call failed after the card form (${record.instant.error}). In the Nuitée Connect dashboard, look up prebook ${hold.prebookId} (${hold.travelers.map((x: any) => x.name).join(', ')}, ${t.depart}). If it's booked, send the customer the reference; if not, ask Nuitée support to finish or refund it.` },
+          staff: { note: `CHECK NUITÉE FIRST: the booking call failed after the card form (${record.instant.error}). In the Nuitée Connect dashboard, look up prebook ${hold.prebookId} (payment ${paymentIntent}; ${hold.travelers.map((x: any) => x.name).join(', ')}, ${t.depart}). If it's booked, send the customer the reference; if not, ask Nuitée support to finish or refund it.` },
         });
       }
       const { error } = await records().upsert({ id: key, owner, kind: 'request', body: record, created: now }, { onConflict: 'id' });
       if (error) throw error;
       await records().update({ body: { ...hold, done: now } }).eq('id', holdKey);
       inBackground(Promise.all([notifyTeam(record), pushTeam(records, b
-        ? { title: `${confirmed ? 'Ticketed' : 'Booked, awaiting airline'} · ${record.id}`, body: `${record.name} · ${record.title} · ${record.payment.currency} ${Number(record.payment.amount).toLocaleString('en-US')} paid`, url: '/#staff', tag: record.id }
+        ? { title: `${record.instant.payProblem ? 'Check the payment' : confirmed ? 'Ticketed' : 'Booked, awaiting airline'} · ${record.id}`, body: `${record.name} · ${record.title} · ${record.payment.currency} ${Number(record.payment.amount).toLocaleString('en-US')} paid`, url: '/#staff', tag: record.id }
         : { title: `Check Nuitée now · ${record.id}`, body: `${record.name} paid for ${record.title} but the booking isn’t confirmed.`, url: '/#staff', tag: record.id })]));
       return json(forCustomer(record), b ? 201 : 202, origin);
     }
@@ -1250,8 +1257,22 @@ Deno.serve(async (req) => {
       const record = { ...row.body, instant: { ...row.body.instant, status: String(b.status ?? row.body.instant.status), bookingRef: b.bookingRef ? String(b.bookingRef) : row.body.instant.bookingRef, pnrs: nuiteePnrs(b).length ? nuiteePnrs(b) : row.body.instant.pnrs } };
       const st = record.instant.status.toUpperCase();
       if (st === 'CONFIRMED' && record.status === 'in_progress') { record.status = 'confirmed'; record.customerMessage = `Your flight is confirmed. Booking reference ${record.instant.bookingRef || record.id}${record.instant.pnrs.length ? `; airline reference ${record.instant.pnrs.join(', ')}` : ''}.`; record.history = [...(record.history ?? []), { at: Date.now(), status: 'confirmed', by: 'airline' }]; }
-      if (/CANCEL/.test(st) && record.status !== 'cancelled') { record.status = 'cancelled'; record.history = [...(record.history ?? []), { at: Date.now(), status: 'cancelled', by: 'airline' }]; }
-      if (JSON.stringify(record) !== JSON.stringify(row.body)) { record.updated = Date.now(); await records().update({ body: record }).eq('id', row.id); }
+      if (/CANCEL/.test(st) && record.status !== 'cancelled') { record.status = 'cancelled'; record.customerMessage = 'The airline cancelled this booking. A Uniworld advisor will contact you about a refund or a new flight.'; record.history = [...(record.history ?? []), { at: Date.now(), status: 'cancelled', by: 'airline' }]; record.staff = { ...(record.staff ?? {}), note: `AIRLINE CANCELLED (${record.instant.status}). Check the booking in the Nuitée Connect dashboard, then contact the customer about a refund or rebooking.` }; }
+      if (JSON.stringify(record) !== JSON.stringify(row.body)) {
+        record.updated = Date.now();
+        await records().update({ body: record }).eq('id', row.id);
+        if (record.status !== row.body.status) {
+          const ok = record.status === 'confirmed', ref = record.instant.pnrs.join(', ') || record.instant.bookingRef || record.id;
+          inBackground(Promise.all([
+            pushTeam(records, ok
+              ? { title: `Airline confirmed · ${record.id}`, body: `${record.name} · ${record.title} · ${ref}`, url: '/#staff', tag: record.id }
+              : { title: `Airline cancelled · ${record.id}`, body: `${record.name} · ${record.title}. Check Nuitée and contact the customer.`, url: '/#staff', tag: record.id }),
+            pushCustomer(records, row.id, ok
+              ? { title: `Flight confirmed · ${record.id}`, body: `${record.title} is confirmed. Airline reference ${ref}.`, url: '/#trips', tag: record.id }
+              : { title: `Flight cancelled · ${record.id}`, body: `The airline cancelled ${record.title}. Uniworld will contact you about a refund or a new flight.`, url: '/#trips', tag: record.id }),
+          ]));
+        }
+      }
       return json(forCustomer(record), 200, origin);
     }
     // Find my booking: the reference plus the phone number or email used on the request.
