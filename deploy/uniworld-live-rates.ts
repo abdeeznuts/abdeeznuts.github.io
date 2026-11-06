@@ -508,9 +508,13 @@ function parseFlights(input: Record<string, unknown>) {
     if (len < 0 || len > 60) throw new Invalid('Choose a return date within 60 days of departure.');
   }
   const adults = intIn(input.adults ?? 1, 1, 9, 'Choose between 1 and 9 travelers.');
+  const children = intIn(input.children ?? 0, 0, 8, 'Choose up to 8 children.');
+  const infants = intIn(input.infants ?? 0, 0, 4, 'Choose up to 4 infants.');
+  if (adults + children + infants > 9) throw new Invalid('Up to 9 travelers in one booking.');
+  if (infants > adults) throw new Invalid('Each infant needs an adult on the booking.');
   const cabin = CABINS[String(input.cabin ?? 'economy').toLowerCase()] ?? '1';
   const currency = currencyOf(input);
-  return { from, to, depart, ret, adults, cabin, currency, gl: CURRENCIES[currency].gl };
+  return { from, to, depart, ret, adults, children, infants, cabin, currency, gl: CURRENCIES[currency].gl };
 }
 type FlightSearch = ReturnType<typeof parseFlights>;
 
@@ -671,7 +675,93 @@ function duffelOption(o: any, markup: number) {
     passengers: (Array.isArray(o.passengers) ? o.passengers : []).map((p: any) => ({ id: p.id, type: p.type ?? 'adult' })),
   };
 }
+// ---------- Instant flights (Nuitée Connect): the same LITEAPI_KEY as hotels ----------
+// Nuitée searches GDS, NDC and low-cost airlines in one call; the traveler later pays on Nuitée's own
+// card form (Nuitée is the merchant of record). Prices are in the traveler's currency.
+const LITEAPI_V3 = 'https://api.liteapi.travel/v3.0';
+const NUITEE_CABIN: Record<string, string> = { '1': 'ECONOMY', '2': 'PREMIUM_ECONOMY', '3': 'BUSINESS', '4': 'FIRST' };
+const POS_COUNTRY: Record<string, string> = { PKR: 'PK', GBP: 'GB', USD: 'US' };
+function nuiteeSlice(j: any, direction: string) {
+  const segs = (Array.isArray(j?.segments) ? j.segments : []).filter((g: any) => String(g.direction || 'OUTBOUND').toUpperCase() === direction);
+  if (!segs.length) return null;
+  const first = segs[0], last = segs[segs.length - 1];
+  const leg = (Array.isArray(j.legDurations) ? j.legDurations : []).find((l: any) => l.direction === direction);
+  return {
+    depart: { id: first.originCode ?? null, time: first.departureTime ?? null },
+    arrive: { id: last.destinationCode ?? null, time: last.arrivalTime ?? null },
+    stops: segs.length - 1 + segs.reduce((n: number, g: any) => n + (Number(g.stopCount) || 0), 0),
+    durationMin: Number.isInteger(leg?.duration?.minutes) ? leg.duration.minutes : null,
+    legs: segs.map((g: any) => ({
+      from: { id: g.originCode ?? null, time: g.departureTime ?? null }, to: { id: g.destinationCode ?? null, time: g.arrivalTime ?? null },
+      airline: g.carrier?.marketingName ?? null, flightNumber: g.carrier?.marketingCode && g.flight?.marketingNumber ? `${g.carrier.marketingCode} ${g.flight.marketingNumber}` : null,
+      airplane: null, durationMin: Number.isInteger(g.duration?.minutes) ? g.duration.minutes : null,
+      operatedBy: g.carrier?.operatingName && g.carrier.operatingName !== g.carrier.marketingName ? g.carrier.operatingName : null,
+    })),
+    layovers: segs.slice(0, -1).map((g: any, i: number) => ({ id: g.destinationCode ?? null, name: g.destinationName ?? null, durationMin: g.arrivalTime && segs[i + 1]?.departureTime ? minutesBetween(g.arrivalTime, segs[i + 1].departureTime) : null })),
+    airlines: [...new Set(segs.map((g: any) => g.carrier?.marketingName).filter(Boolean))] as string[],
+    logo: safeLink(first.carrier?.marketingLogo),
+  };
+}
+function nuiteeOption(j: any) {
+  const offer = j?.cheapestOffer ?? (Array.isArray(j?.offers) ? j.offers[0] : null);
+  const total = Number(offer?.pricing?.display?.total), out = nuiteeSlice(j, 'OUTBOUND');
+  if (!(total > 0) || !out || typeof offer?.offerId !== 'string') return null;
+  const back = nuiteeSlice(j, 'INBOUND');
+  const { airlines, logo, ...outbound } = out;
+  return {
+    offerId: offer.offerId, provider: 'nuitee', instant: true, best: !!j.isCheapest,
+    price: Math.ceil(total), exact: Math.round(total * 100) / 100, currency: String(offer.pricing.display.currency || '').toUpperCase(),
+    airlines: [...new Set([...airlines, ...(back?.airlines ?? [])])], logo,
+    ...outbound, back: back ? (({ airlines: _a, logo: _l, ...rest }) => rest)(back) : null,
+    refundable: !!offer.terms?.refundable, changeable: !!offer.terms?.changeable,
+    bags: { carryOn: !!offer.baggage?.hasCarryOnBag, checked: !!offer.baggage?.hasCheckedBag },
+    fareFamily: offer.fare?.family ? String(offer.fare.family).slice(0, 40) : null,
+    seatsLeft: Number.isInteger(offer.fare?.seatsRemaining) ? offer.fare.seatsRemaining : null,
+    docsRequired: true, expiresAt: offer.expiration ?? null,
+  };
+}
+async function nuiteeFlights(f: FlightSearch, key: string, origin: string | null) {
+  const [from, to] = [f.from.split(',')[0], f.to.split(',')[0]];
+  const markup = flightMarkup();
+  const body = {
+    legs: [{ origin: from, destination: to, date: f.depart, direction: 'OUTBOUND' }, ...(f.ret ? [{ origin: to, destination: from, date: f.ret, direction: 'INBOUND' }] : [])],
+    adults: f.adults, children: f.children, infants: f.infants, cabinClass: NUITEE_CABIN[f.cabin] ?? 'ECONOMY',
+    currency: f.currency, country: POS_COUNTRY[f.currency] ?? 'US',
+    filters: { showCheapestOfferOnly: true, maxStops: 2 }, sort: { sortBy: 'price', sortOrder: 'asc' },
+    ...(markup > 0 ? { margin: { rateSearch: markup } } : {}),
+  };
+  try {
+    const res = await fetch(`${LITEAPI_V3}/flights/rates`, { method: 'POST', headers: { 'X-API-Key': key, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(40000) });
+    const json: any = await res.json().catch(() => null);
+    if (!res.ok || !json) {
+      console.error('nuitee flights', res.status, JSON.stringify(json?.error ?? json ?? '').slice(0, 240));
+      return reply({ ok: false, kind: 'instant-flights', provider: 'nuitee', notice: res.status === 401 || res.status === 403 ? 'setup' : 'unavailable', data: null }, 200, origin);
+    }
+    const seen = new Map<string, any>();
+    for (const batch of Array.isArray(json.data) ? json.data : []) for (const j of Array.isArray(batch?.journeys) ? batch.journeys : []) {
+      const o = nuiteeOption(j);
+      const k = String(j.journeyKey || o?.offerId);
+      if (o && (!seen.has(k) || seen.get(k).price > o.price)) seen.set(k, o);
+    }
+    const options = [...seen.values()].sort((a, b) => a.price - b.price).slice(0, 40);
+    return reply({ ok: options.length > 0, kind: 'instant-flights', provider: 'nuitee', currency: options[0]?.currency ?? f.currency, sandbox: key.startsWith('sand_'),
+      search: { from, to, depart: f.depart, return: f.ret, adults: f.adults, children: f.children, infants: f.infants, cabin: body.cabinClass },
+      data: options.length ? { options } : null, notice: options.length ? null : 'empty', fetchedAt: new Date().toISOString() }, 200, origin);
+  } catch (e) {
+    console.error('nuitee flights', String((e as Error)?.message ?? e).slice(0, 200));
+    return reply({ ok: false, kind: 'instant-flights', provider: 'nuitee', notice: 'unavailable', data: null }, 200, origin);
+  }
+}
+
 async function instantFlights(input: Record<string, unknown>, origin: string | null) {
+  const liteKey = Deno.env.get('LITEAPI_KEY') ?? '';
+  if (liteKey) {
+    let f;
+    try { f = parseFlights(input); } catch (e) {
+      return reply({ ok: false, reason: 'invalid', message: e instanceof Invalid ? e.message : 'Invalid request.' }, 400, origin);
+    }
+    return nuiteeFlights(f, liteKey, origin);
+  }
   const token = Deno.env.get('DUFFEL_ACCESS_TOKEN') ?? '';
   if (!token) return reply({ ok: false, kind: 'instant-flights', notice: 'off', data: null }, 200, origin);
   let f;
@@ -815,13 +905,15 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
       return reply({ ok: !!r.payload, kind, currency: d.currency, search: { checkIn: d.checkIn, checkOut: d.checkOut, nights: d.nights, adults: d.adults }, data: r.payload, fetchedAt: r.fetchedAt, stale: r.stale, notice: r.notice, setup: !apiKey }, 200, origin);
     }
     const f = parseFlights(input);
-    const key = 'fl|' + JSON.stringify([f.from, f.to, f.depart, f.ret, f.adults, f.cabin, f.currency]);
+    const kids = f.children || f.infants ? [f.children, f.infants] : [];
+    const key = 'fl|' + JSON.stringify([f.from, f.to, f.depart, f.ret, f.adults, f.cabin, f.currency, ...kids]);
     const r = await cachedSearch(db, apiKey, key, TTL_HOURS.list, async () => flightList(await serp({
       engine: 'google_flights', departure_id: f.from, arrival_id: f.to, outbound_date: f.depart,
       ...(f.ret ? { return_date: f.ret, type: '1' } : { type: '2' }),
-      adults: String(f.adults), travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en',
+      adults: String(f.adults), ...(f.children ? { children: String(f.children) } : {}), ...(f.infants ? { infants_on_lap: String(f.infants) } : {}),
+      travel_class: f.cabin, currency: f.currency, gl: f.gl, hl: 'en',
     }, apiKey), f));
-    return reply({ ok: !!r.payload, kind, currency: f.currency, search: { from: f.from, to: f.to, depart: f.depart, return: f.ret, adults: f.adults, cabin: f.cabin }, data: r.payload, fetchedAt: r.fetchedAt, stale: r.stale, notice: r.notice, setup: !apiKey }, 200, origin);
+    return reply({ ok: !!r.payload, kind, currency: f.currency, search: { from: f.from, to: f.to, depart: f.depart, return: f.ret, adults: f.adults, children: f.children, infants: f.infants, cabin: f.cabin }, data: r.payload, fetchedAt: r.fetchedAt, stale: r.stale, notice: r.notice, setup: !apiKey }, 200, origin);
   } catch (e) {
     if (e instanceof Invalid) return reply({ ok: false, reason: 'invalid', message: e.message }, 400, origin);
     console.error('listing', kind, String((e as Error)?.message ?? e).slice(0, 200));
@@ -830,7 +922,7 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-10-24.4';
+const BUILD = '2026-11-06.1';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -858,7 +950,7 @@ Deno.serve(async (req) => {
   if (input.ping) {
     const month = new Date().toISOString().slice(0, 7);
     const { data } = await db.from('uniworld_serpapi_usage').select('calls').eq('month', month).maybeSingle();
-    return reply({ ok: true, build: BUILD, source: await sourceHash(), configured: !!apiKey, instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: !!Deno.env.get('DUFFEL_ACCESS_TOKEN') && !!Deno.env.get('STRIPE_SECRET_KEY') }, usage: { month, calls: data?.calls ?? 0, cap: MONTHLY_CAP }, ttlHours: TTL_HOURS }, 200, origin);
+    return reply({ ok: true, build: BUILD, source: await sourceHash(), configured: !!apiKey, instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: !!Deno.env.get('LITEAPI_KEY') || (!!Deno.env.get('DUFFEL_ACCESS_TOKEN') && !!Deno.env.get('STRIPE_SECRET_KEY')) }, usage: { month, calls: data?.calls ?? 0, cap: MONTHLY_CAP }, ttlHours: TTL_HOURS }, 200, origin);
   }
 
   if (input.kind === 'instant-hotels') return instantHotels(input, origin);
