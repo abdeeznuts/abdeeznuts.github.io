@@ -267,3 +267,4 @@
 .if-pax>label{font-size:10px;font-weight:600;min-width:0}
 .if-pax>label>.field-input{margin-top:8px;width:100%}
 @media(max-width:620px){.if-pax{grid-template-columns:1fr}.lf-instant,.lf-deals{padding:14px 12px}}
+.lf-extras{font-size:11px;color:#3c5e52;margin:0}

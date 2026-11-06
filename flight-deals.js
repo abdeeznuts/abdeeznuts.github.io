@@ -52,7 +52,7 @@ function trickBody(fs, kind, st) {
 
 // ---------- Split tickets ----------
 function splitList(fs, res) {
-  const e = d.esc, cur = res.currency || d.state.currency, n = Number(fs.travelers) || 1, cheapest = normalCheapest(fs);
+  const e = d.esc, cur = res.currency || d.state.currency, n = (Number(fs.travelers) || 1) + (Number(fs.children) || 0) + (Number(fs.infants) || 0), cheapest = normalCheapest(fs);
   let combos = res.data?.combos || [];
   if (cheapest) combos = combos.filter((c) => c.total < cheapest);
   fs.deals.splitShown = combos;
@@ -77,7 +77,7 @@ function ticketRow(label, o) {
     <div><b>${e(clock(o.arrive?.time))}${nextDay(o.depart?.time, o.arrive?.time) ? '<sup>+1</sup>' : ''}</b><small>${e(o.arrive?.id || '')}</small></div></div></div>`;
 }
 function bookSplit(fs, c) {
-  const from = labelFor(fs.a.code), to = labelFor(fs.b.code), n = Number(fs.travelers) || 1, cur = fs.deals.split?.res?.currency || d.state.currency;
+  const from = labelFor(fs.a.code), to = labelFor(fs.b.code), n = Math.min((Number(fs.travelers) || 1) + (Number(fs.children) || 0) + (Number(fs.infants) || 0), 9), cur = fs.deals.split?.res?.currency || d.state.currency;
   const t = (o) => `${o.legs.map((l) => l.flightNumber).filter(Boolean).join('+') || o.airlines.join('+')} ${o.depart?.id} ${clock(o.depart?.time)} → ${o.arrive?.id} ${clock(o.arrive?.time)}`;
   d.openRequest({
     kind: 'flight', from, to, start: fs.start, end: '', travelers: n, cabin: fs.cabin, oneWay: true,
@@ -89,7 +89,7 @@ function bookSplit(fs, c) {
 
 // ---------- Hidden city ----------
 function hiddenList(fs, res) {
-  const e = d.esc, cur = res.currency || d.state.currency, n = Number(fs.travelers) || 1, ok = fs.deals.ok;
+  const e = d.esc, cur = res.currency || d.state.currency, n = (Number(fs.travelers) || 1) + (Number(fs.children) || 0) + (Number(fs.infants) || 0), ok = fs.deals.ok;
   const cheapest = normalCheapest(fs), nonstop = normalCheapest(fs, true);
   // A ticket that flies nonstop to your stop is compared with the cheapest nonstop ticket.
   let deals = (res.data?.deals || []).map((x) => (x.getOff.index === 0 && nonstop ? { ...x, ref: nonstop, refText: 'the cheapest nonstop ticket' } : { ...x, ref: cheapest, refText: 'the cheapest ticket' }));
@@ -126,7 +126,7 @@ function hiddenCard(x, fs, cur, n, ok, link) {
 // ---------- Running the searches ----------
 export async function runDeal(el, fs, kind, paint) {
   fs.deals = fs.deals || { split: null, hidden: null, ok: false };
-  const base = { from: fs.fromIds, depart: fs.start, adults: Number(fs.travelers) || 1, cabin: fs.cabin, currency: d.state.currency };
+  const base = { from: fs.fromIds, depart: fs.start, adults: Number(fs.travelers) || 1, children: Number(fs.children) || 0, infants: Number(fs.infants) || 0, cabin: fs.cabin, currency: d.state.currency };
   let body;
   if (kind === 'split') {
     const hubs = hubAirports(fs.a.code, fs.b.code);

@@ -202,6 +202,16 @@ function paymentBlock(r) {
 
 function instantBlock(r) {
   const x = r.instant, e = d.esc;
+  if (x?.provider === 'nuitee') {
+    if (!x.bookingId && !x.bookingRef) return '';
+    const ok = String(x.status || '').toUpperCase() === 'CONFIRMED';
+    return `<div class="req-docs req-instant"><span class="eyebrow">BOOKED INSTANTLY${x.sandbox ? ' · TEST MODE' : ''}</span><ul>
+    <li><span>Booking reference</span><b>${e(x.bookingRef || r.id)}</b></li>
+    <li><span>Airline reference</span><b>${(x.pnrs || []).length ? x.pnrs.map(e).join(', ') : 'On its way from the airline'}</b></li>
+    <li><span>Status</span><b>${ok ? 'Confirmed' : /CANCEL/i.test(x.status || '') ? 'Cancelled' : 'Waiting for the airline'}</b></li>
+    ${(x.travelers || []).length ? `<li><span>Travelers</span><b>${x.travelers.map((t) => e(t.name) + (t.type !== 'adult' ? ` (${e(t.type)})` : '')).join(', ')}</b></li>` : ''}
+  </ul>${ok && (x.pnrs || []).length ? '<p class="small-print">Use the airline reference on the airline’s website or app to check in, choose seats and add bags.</p>' : `<button class="text-button" data-action="req-nflight-refresh" data-id="${e(r.recordId)}">Check with the airline</button>`}</div>`;
+  }
   if (x?.provider === 'duffel') {
     if (!x.pnr) return '';
     const tickets = Array.isArray(x.tickets) ? x.tickets : [];
@@ -221,6 +231,10 @@ function instantBlock(r) {
 // What the app did on its own, for the team.
 function staffInstant(r) {
   const x = r.instant, e = d.esc, ic = d.icon, test = x.sandbox ? ' · TEST' : '';
+  if (x.provider === 'nuitee') {
+    if (x.unsure || !x.bookingId) return `<p class="staff-alert bad">${ic('info')} PAID by card, booking not confirmed: ${e(x.error || 'unknown')}. Check Nuitée Connect for prebook ${e(x.prebookId || '')} before doing anything else (see the note below)${test}.</p>`;
+    return `<p class="staff-alert ${String(x.status).toUpperCase() === 'CONFIRMED' ? '' : 'bad'}">${ic('check')} Booked and paid automatically via Nuitée · ${e(x.bookingRef || x.bookingId)}${(x.pnrs || []).length ? ' · airline ' + x.pnrs.map(e).join(', ') : ''} · ${e(x.status)}${test}</p>`;
+  }
   if (x.provider === 'duffel') {
     if (x.pnr) return `<p class="staff-alert">${ic('check')} Ticketed and paid automatically · PNR ${e(x.pnr)}${x.orderId ? ' · Duffel ' + e(x.orderId) : ''}${(x.tickets || []).length ? ' · e-tickets ' + x.tickets.map(e).join(', ') : ''}${test}</p>`;
     if (x.unsure) return `<p class="staff-alert bad">${ic('info')} PAID, ticket not confirmed: ${e(x.error || 'unknown')}. Check Duffel before rebooking (see the note below)${test}.</p>`;
@@ -235,14 +249,33 @@ function documentsBlock(r) {
   return `<div class="req-docs"><span class="eyebrow">YOUR TRAVEL DOCUMENTS</span><ul>${r.documents.map((x) => `<li><a href="${e(x.url)}" target="_blank" rel="noopener noreferrer">${ic('download')} ${e(x.label)} ${ic('arrow-up-right')}</a></li>`).join('')}</ul></div>`;
 }
 
+// While a paid flight waits for the airline, check again now and then as long as its booking is open on screen.
+let flightWatch = null;
+function watchFlight(r, round = 0) {
+  clearTimeout(flightWatch);
+  const x = r.instant, st = String(x?.status || '').toUpperCase();
+  if (x?.provider !== 'nuitee' || !x.bookingId || r.status !== 'in_progress' || st === 'CONFIRMED' || /CANCEL/.test(st) || round >= 10) return;
+  flightWatch = setTimeout(async () => {
+    const onScreen = () => document.querySelector('#modal[open] .req-panel .confirmation-code')?.textContent.trim() === r.id;
+    if (!onScreen()) return;
+    try {
+      const fresh = await d.api('instant/nflight/status/' + r.recordId);
+      mergeRequest(fresh);
+      if (!onScreen()) return;
+      if (fresh.status !== r.status || String(fresh.instant?.status) !== String(x.status) || String(fresh.instant?.pnrs) !== String(x.pnrs)) { showRequest(fresh); if (fresh.status === 'confirmed') d.toast('The airline has confirmed your flight.'); }
+      else watchFlight(fresh, round + 1);
+    } catch { watchFlight(r, round + 1); }
+  }, round === 0 ? 8000 : 30000);
+}
+
 export function showRequest(r, fresh = false) {
   const [label, text] = STATUS[r.status] || STATUS.new, e = d.esc, ic = d.icon, p = priceOf(r);
   const open = (r.status === 'new' || r.status === 'in_progress') && payState(r) !== 'paid';
   d.openModal(`<div class="success-panel req-panel">
     <div class="success-icon">${ic(r.status === 'cancelled' ? 'x' : 'check')}</div>
-    <span class="eyebrow">${r.instant?.bookingId || r.instant?.pnr ? `YOUR ${KIND[r.kind] || 'TRIP'} BOOKING` : fresh ? 'REQUEST SENT' : `YOUR ${KIND[r.kind] || 'TRIP'} REQUEST`}</span>
+    <span class="eyebrow">${r.instant?.bookingId || r.instant?.pnr || r.instant?.provider === 'nuitee' ? `YOUR ${KIND[r.kind] || 'TRIP'} BOOKING` : fresh ? 'REQUEST SENT' : `YOUR ${KIND[r.kind] || 'TRIP'} REQUEST`}</span>
     <h2 id="modalTitle">${fresh ? `Thank you, ${e(firstName(r.name))}.` : e(r.title)}</h2>
-    <p>${r.instant?.pnr && r.status === 'confirmed' ? 'Ticketed and paid. Your flight is confirmed.' : r.instant?.bookingId && r.status === 'confirmed' ? 'Booked and paid. Your stay is confirmed.' : fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
+    <p>${r.instant?.provider === 'nuitee' && r.status === 'confirmed' ? 'Booked and paid. Your flight is confirmed.' : r.instant?.provider === 'nuitee' ? 'Paid. The airline is confirming your seats; you don’t need to pay again.' : r.instant?.pnr && r.status === 'confirmed' ? 'Ticketed and paid. Your flight is confirmed.' : r.instant?.bookingId && r.status === 'confirmed' ? 'Booked and paid. Your stay is confirmed.' : fresh ? `A Uniworld advisor will contact you by ${REACH[r.contactBy] || 'phone'} to confirm availability, the final price and how to pay. Nothing is booked or charged yet.` : text}</p>
     <div class="confirmation-code">${e(r.id)}</div>
     ${fresh ? '<p class="req-keep">Keep this reference. With it and your phone number you can find this booking on any phone.</p>' : ''}
     ${r.status !== 'cancelled' ? alertsButton('outline-button req-alerts-panel') : ''}
@@ -254,6 +287,7 @@ export function showRequest(r, fresh = false) {
     <div class="booking-facts"><strong>${e(r.title)}</strong>${r.details ? `<p>${e(r.details)}</p>` : ''}${r.kind === 'umrah' ? breakdownList(r) : r.chosen ? `<p>${e(r.chosen)}</p>` : ''}<p>${datesOf(r)} · ${people(r)}</p>${p ? `<p>${p.label}: <b>${p.value}</b>${p.extra ? ` · ${p.extra}` : ''}</p>` : ''}<small>${e(r.name)} · ${e(r.phone)}${r.email ? ' · ' + e(r.email) : ''}</small></div>
     <div class="booking-actions">${contactButtons(r)}<button class="text-button" data-action="req-summary" data-id="${e(r.recordId)}">${ic('download')} Download summary</button><button class="text-button" data-action="bookings">Go to My trips ${ic('arrow-right')}</button>${open ? `<button class="text-button danger" data-action="req-cancel" data-id="${e(r.recordId)}">Cancel request</button>` : ''}</div>
   </div>`);
+  watchFlight(r);
 }
 
 function contactButtons(r) {
@@ -279,6 +313,7 @@ function summaryText(r) {
   if (payState(r) === 'paid') lines.push('', `Paid: ${payMoney(r.payment.amount, r.payment.currency)}${r.payment.paidAt ? ' on ' + dateOf(r.payment.paidAt) : ''}`);
   if (r.instant?.bookingId) lines.push(`Booking number: ${r.instant.bookingId}`, `Hotel confirmation: ${r.instant.confirmation || 'pending'}`);
   if (r.instant?.pnr) lines.push(`Airline booking reference: ${r.instant.pnr}`, ...(r.instant.tickets || []).map((t, i) => `E-ticket ${i + 1}: ${t}`));
+  if (r.instant?.provider === 'nuitee') lines.push(`Booking reference: ${r.instant.bookingRef || r.id}`, `Airline reference: ${(r.instant.pnrs || []).join(', ') || 'pending'}`, `Status: ${r.instant.status}`);
   if (r.documents?.length) { lines.push('', 'Travel documents:'); for (const x of r.documents) lines.push(`- ${x.label}: ${x.url}`); }
   lines.push('', `Name: ${r.name}`, `Phone / WhatsApp: ${r.phone}`);
   if (r.email) lines.push(`Email: ${r.email}`);
@@ -348,6 +383,11 @@ async function onClick(ev) {
   if (!r) return;
   if (a === 'req-view') showRequest(r);
   else if (a === 'req-summary') { download(`Uniworld-${r.id}.txt`, summaryText(r)); d.toast('Your request summary is ready.'); }
+  else if (a === 'req-nflight-refresh') {
+    b.disabled = true;
+    try { const x = await d.api('instant/nflight/status/' + r.recordId); mergeRequest(x); showRequest(x); d.toast(String(x.instant?.status).toUpperCase() === 'CONFIRMED' ? 'The airline has confirmed your flight.' : 'The airline hasn’t confirmed yet. We’ll keep checking; you don’t need to pay again.'); }
+    catch (ex) { d.toast(ex.message); b.disabled = false; }
+  }
   else if (a === 'req-instant-refresh') {
     b.disabled = true;
     try { const x = await d.api('instant/hotel/status/' + r.recordId); mergeRequest(x); showRequest(x); d.toast(x.instant?.confirmation ? 'The hotel has confirmed your booking.' : 'The hotel hasn’t sent its number yet. Your booking is confirmed either way.'); }

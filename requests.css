@@ -170,8 +170,11 @@
 .ib-summary strong{font-size:20px;color:var(--ink);margin-top:4px}
 .ib-note{font-size:12px;background:#fff6e8;color:#8a5a1f;border-radius:10px;padding:9px 12px;margin:8px 0}
 .ib-pay{min-height:120px;margin:10px 0}
+.ib-pay button[type=submit],.ib-pay .lp-submit-button{display:flex;justify-content:center;align-items:center;width:100%;min-height:52px;margin:14px 0 4px;padding:14px 20px;border:0;border-radius:12px;background:var(--ink,#17383a);color:#fff;font:inherit;font-size:16px;font-weight:600;cursor:pointer}
+.ib-pay button[type=submit]:disabled,.ib-pay .lp-submit-button:disabled{opacity:.6;cursor:wait}
 .ib form{margin-top:6px}
 .req-instant li{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:6px 2px;border-bottom:1px dashed #e2e6dc}
 .req-instant li span{color:#6f8573}
 .staff-alert.bad{background:#fff1ea;color:#a4461d}
 @media(max-width:520px){.ib-rooms li{grid-template-columns:minmax(0,1fr)}.ib-price{grid-template-columns:auto auto;justify-content:space-between;align-items:center;justify-items:start}}
+#modalTitle:focus{outline:none}

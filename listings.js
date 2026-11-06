@@ -422,7 +422,7 @@ export async function searchFlights(el, search) {
   if (instantFlightsOn()) loadInstantFlights(el, fs);
   const slow = setTimeout(() => { const w = el.querySelector('.ls-wait'); if (w) w.textContent = 'Comparing airlines and routes. This can take a few seconds…'; }, 5000);
   try {
-    const res = await fetchLive({ kind: 'flights', from: fromIds, to: toIds, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, cabin: fs.cabin, currency: cur() });
+    const res = await fetchLive({ kind: 'flights', from: fromIds, to: toIds, depart: search.start, return: search.end || undefined, adults: Number(search.travelers) || 1, ...kidsOf(search), cabin: fs.cabin, currency: cur() });
     if (el._flights !== fs) return;
     fs.data = res.data; fs.fetchedAt = res.fetchedAt; fs.notice = res.data ? (res.stale ? 'partial' : null) : (res.notice || 'unavailable'); fs.currency = res.currency;
     renderFlights(el, fs);
@@ -442,7 +442,7 @@ async function loadInstantFlights(el, fs) {
   fs.instant = { status: 'loading' };
   paintInstant(el, fs);
   try {
-    const res = await fetchLive({ kind: 'instant-flights', from: fs.a.code, to: fs.b.code, depart: fs.start, return: fs.end || undefined, adults: Number(fs.travelers) || 1, cabin: fs.cabin, currency: cur() });
+    const res = await fetchLive({ kind: 'instant-flights', from: fs.a.code, to: fs.b.code, depart: fs.start, return: fs.end || undefined, adults: Number(fs.travelers) || 1, ...kidsOf(fs), cabin: fs.cabin, currency: cur() });
     if (el._flights !== fs) return;
     fs.instant = res.data?.options?.length ? { status: 'ready', options: res.data.options, sandbox: !!res.sandbox, fetchedAt: res.fetchedAt, all: false } : { status: res.notice || 'empty' };
     fs.instantSandbox = !!res.sandbox;
@@ -474,22 +474,28 @@ function instantHtml(fs) {
     <h3 class="lf-sub">More airlines · booked by a Uniworld advisor</h3>`;
 }
 function instantCard(o, fs, i) {
-  const e = d.esc, n = Number(fs.travelers) || 1;
+  const e = d.esc, n = peopleOf(fs);
+  const days = (a, b) => (a && b ? Math.round((Date.parse(b.slice(0, 10)) - Date.parse(a.slice(0, 10))) / 864e5) : 0);
+  const extras = [o.fareFamily, o.bags ? (o.bags.checked ? 'Checked bag included' : o.bags.carryOn ? 'Carry-on only' : 'No bags included') : '', o.seatsLeft && o.seatsLeft <= 5 ? `${o.seatsLeft} seats left at this price` : ''].filter(Boolean);
   const leg = (x) => { const via = (x.layovers || []).map((l) => l.id).filter(Boolean).join(', '); return `<div class="lf-route">
       <div><b>${e(clock(x.depart?.time))}</b><small>${e(x.depart?.id || '')}</small></div>
       <div class="lf-mid"><small>${e(dur(x.durationMin))}</small><i aria-hidden="true"></i><small>${x.stops === 0 ? 'Nonstop' : `${plural(x.stops, 'stop')}${via ? ` · ${e(via)}` : ''}`}</small></div>
-      <div><b>${e(clock(x.arrive?.time))}${x.depart?.time && x.arrive?.time && x.arrive.time.slice(0, 10) > x.depart.time.slice(0, 10) ? '<sup>+1</sup>' : ''}</b><small>${e(x.arrive?.id || '')}</small></div></div>`; };
+      <div><b>${e(clock(x.arrive?.time))}${days(x.depart?.time, x.arrive?.time) > 0 ? `<sup>+${days(x.depart.time, x.arrive.time)}</sup>` : ''}</b><small>${e(x.arrive?.id || '')}</small></div></div>`; };
   return `<article class="lf-card lf-bookable">
-    <div class="lf-top">${o.logo ? `<img class="live-img live-logo" src="${e(o.logo)}" alt="" width="22" height="22" data-fallback="1"/>` : ''}<span>${e(o.airlines.join(' + ') || 'Airline')}</span><span class="lf-badge lf-instant-badge">Instant ticket</span>${o.refundable ? '<span class="lf-badge">Refundable</span>' : ''}</div>
+    <div class="lf-top">${o.logo ? `<img class="live-img live-logo" src="${e(o.logo)}" alt="" width="22" height="22" data-fallback="1"/>` : ''}<span>${e(o.airlines.join(' + ') || 'Airline')}</span><span class="lf-badge lf-instant-badge">${o.provider === 'nuitee' ? 'Book instantly' : 'Instant ticket'}</span>${o.refundable ? '<span class="lf-badge">Refundable</span>' : ''}</div>
     ${leg(o)}${o.back ? `<small class="lf-back-label">Return${o.back.depart?.time ? ' · ' + e(weekday(o.back.depart.time.slice(0, 10))) : ''}</small>${leg(o.back)}` : ''}
-    <div class="lf-bottom"><div><strong>${anyMoney(o.price, o.currency)}</strong><small>${o.back ? 'round trip' : 'one way'} · ${n > 1 ? `total for ${n} travelers` : 'per person'}</small></div><button class="dark-button compact" data-lf="instant-book" data-i="${i}">Book now</button></div>
+    ${extras.length ? `<p class="lf-extras">${extras.map(e).join(' · ')}</p>` : ''}
+    <div class="lf-bottom"><div><strong>${anyMoney(o.exact ?? o.price, o.currency)}</strong><small>${o.back ? 'round trip' : 'one way'} · ${n > 1 ? `total for ${n} travelers` : 'per person'}</small></div><button class="dark-button compact" data-lf="instant-book" data-i="${i}">Book now</button></div>
     <details class="lf-details"><summary>Flight details</summary><ol>${[...o.legs, ...(o.back?.legs || [])].map((l) => `<li><b>${e(clock(l.from?.time))} ${e(l.from?.id || '')} → ${e(clock(l.to?.time))} ${e(l.to?.id || '')}</b><small>${[l.airline, l.flightNumber, l.airplane, dur(l.durationMin)].filter(Boolean).map(e).join(' · ')}</small></li>`).join('')}</ol><p class="small-print">${o.refundable ? 'Refundable before departure (airline fees may apply).' : 'Non-refundable.'} ${o.changeable ? 'Changes allowed (airline fees may apply).' : 'No changes.'}</p></details>
   </article>`;
 }
 
 function flightSummary(fs) {
-  return `${weekday(fs.start)}${fs.end ? ` → ${weekday(fs.end)}` : ' · one way'} · ${plural(Number(fs.travelers) || 1, 'traveler')} · ${d.esc(fs.cabin)}`;
+  const kids = [Number(fs.children) ? plural(Number(fs.children), 'child').replace('childs', 'children') : '', Number(fs.infants) ? plural(Number(fs.infants), 'infant') : ''].filter(Boolean);
+  return `${weekday(fs.start)}${fs.end ? ` → ${weekday(fs.end)}` : ' · one way'} · ${kids.length ? plural(Number(fs.travelers) || 1, 'adult') + ', ' + kids.join(', ') : plural(Number(fs.travelers) || 1, 'traveler')} · ${d.esc(fs.cabin)}`;
 }
+const kidsOf = (fs) => ({ children: Number(fs.children) || 0, infants: Number(fs.infants) || 0 });
+const peopleOf = (fs) => (Number(fs.travelers) || 1) + (Number(fs.children) || 0) + (Number(fs.infants) || 0);
 
 function sortedOptions(fs) {
   let list = [...(fs.data?.options || [])];
@@ -544,7 +550,7 @@ function flightCard(o, fs, i, cheapest, fastest, bestIndex) {
 }
 
 function flightPayload(o, fs) {
-  const from = fs.fromLabel, to = fs.toLabel, n = Number(fs.travelers) || 1;
+  const from = fs.fromLabel, to = fs.toLabel, n = Math.min(peopleOf(fs), 9);
   const stopsText = o.stops === 0 ? 'Nonstop' : `${plural(o.stops, 'stop')}${o.layovers.length ? ' via ' + o.layovers.map((l) => l.id).filter(Boolean).join(', ') : ''}`;
   const numbers = o.legs.map((l) => l.flightNumber).filter(Boolean).join(' + ');
   return {
@@ -576,4 +582,4 @@ function flightAction(ev, el) {
   }
 }
 // The search a results page came from (to search again with one change).
-const searchOf = (fs) => ({ kind: 'flight', from: fs.from, to: fs.to, start: fs.start, end: fs.end || '', travelers: fs.travelers, cabin: fs.cabin, nearby: fs.nearby });
+const searchOf = (fs) => ({ kind: 'flight', from: fs.from, to: fs.to, start: fs.start, end: fs.end || '', travelers: fs.travelers, children: fs.children || 0, infants: fs.infants || 0, cabin: fs.cabin, nearby: fs.nearby });

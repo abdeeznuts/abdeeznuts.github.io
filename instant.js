@@ -111,7 +111,7 @@ function payStep(p, trip) {
   });
 }
 let sdkPromise = null;
-function loadSdk() {
+export function loadSdk() {
   if (window.LiteAPIPayment) return Promise.resolve();
   if (!sdkPromise) sdkPromise = new Promise((resolve, reject) => {
     const s = document.createElement('script');
