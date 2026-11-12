@@ -12,6 +12,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const ORIGINS = new Set([
   'https://abdeeznuts.github.io',
   'http://127.0.0.1:5173', 'http://localhost:5173',
+  // The store apps (Capacitor): Android serves the app's files from https://localhost, iPhone from capacitor://localhost.
+  'https://localhost', 'capacitor://localhost',
   ...(Deno.env.get('UNIWORLD_ALLOWED_ORIGINS') ?? '').split(',').map((s) => s.trim().replace(/\/+$/, '')).filter((s) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(s)),
 ]);
 const APP_URL = Deno.env.get('UNIWORLD_APP_URL') || 'https://abdeeznuts.github.io/';
@@ -838,7 +840,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-11-12.1';
+const BUILD = '2026-11-12.2';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
