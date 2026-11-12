@@ -6,17 +6,39 @@
 import { money as liveMoney } from './live-rates.js';
 import { alertsState, turnOnAlerts, turnOffAlerts, ALERT_HELP } from './push.js';
 
-// Uniworld contact details (from uniworldinc.com). The WhatsApp number is set by the team
-// in the team inbox (Settings) and arrives with the app's data; it can also be put here
-// in international format with no + or spaces (for example 923001234567).
+// UniWorld Travel & Tours contact details, from UniWorld's own pages (uniworld.pk,
+// uniworldtravelandtours.com, @uniworld.pk) and the UniWorld USA line used on every US ad.
+// The team can change the WhatsApp number in the team inbox (Settings); it arrives with the
+// app's data in international format with no + or spaces.
 export const CONTACT = {
-  email: 'contact@uniworldinc.com',
-  phone: '+18444002310',
-  phoneLabel: '+1 (844) 400-2310',
-  whatsapp: '',
+  email: 'info@uniworld.pk',
+  phone: '+17132811975',
+  phoneLabel: '+1 (713) 281-1975',
+  whatsapp: '17132811975',
 };
+export const COMPANY = {
+  name: 'UniWorld Travel & Tours',
+  legal: 'Uniworld Travel & Tours (Private) Limited',
+  office: 'Shop No. 2, Arab Tower, Plot No. 152/A, Block-2, P.E.C.H.S., Karachi, Pakistan',
+  officePhone: '+922134383838', officePhoneLabel: '+92 21 3438 3838',
+  pkWhatsapp: '923351666677', pkWhatsappLabel: '+92 335 1666677',
+  ukWhatsapp: '447922244410', ukWhatsappLabel: '+44 7922 244410',
+  iata: '273-4-4376',
+  since: 2016,
+};
+const waLabel = (n) => n === '17132811975' ? '+1 (713) 281-1975' : '+' + n;
+// Keep every WhatsApp link on the page (footer, banners) on the current number.
+export function applyContactLinks(root = document) {
+  root.querySelectorAll('[data-wa-link]').forEach((a) => {
+    const text = a.dataset.waText ? `?text=${encodeURIComponent(a.dataset.waText)}` : '';
+    a.href = `https://wa.me/${CONTACT.whatsapp}${text}`;
+    const label = a.querySelector('[data-wa-number]');
+    if (label) label.textContent = waLabel(CONTACT.whatsapp);
+  });
+}
 export function setContact(c) {
   if (c && typeof c.whatsapp === 'string' && /^\d{8,15}$/.test(c.whatsapp)) CONTACT.whatsapp = c.whatsapp;
+  applyContactLinks();
 }
 
 const STATUS = {
@@ -25,7 +47,7 @@ const STATUS = {
   confirmed: ['Confirmed', 'Uniworld has confirmed this trip. See the message from your advisor.'],
   cancelled: ['Cancelled', 'This request is cancelled. You can send a new one any time.'],
 };
-const KIND = { stay: 'STAY', holiday: 'JOURNEY', experience: 'EXPERIENCE', flight: 'FLIGHT', hotel: 'HOTEL', umrah: 'UMRAH' };
+const KIND = { stay: 'STAY', holiday: 'JOURNEY', experience: 'SERVICE', flight: 'FLIGHT', hotel: 'HOTEL', umrah: 'UMRAH' };
 const REACH = { whatsapp: 'WhatsApp', call: 'phone', email: 'email' };
 const PAY_CURRENCIES = ['PKR', 'GBP', 'USD', 'SAR', 'AED', 'EUR'];
 
@@ -427,10 +449,14 @@ function parseDocs(text) {
 
 export function mountStaff(main) {
   const e = d.esc, ic = d.icon;
-  let list = [], filter = 'open', timer = 0, alive = true, checkedAt = 0, settings = { whatsapp: '', paymentNote: '' };
+  let list = [], filter = 'open', timer = 0, alive = true, checkedAt = 0, settings = { whatsapp: '', paymentNote: '' }, showTests = false;
   const seen = getSeen();
   const staffApi = (path, method = 'GET', data) => d.api(path, method, data, { 'x-uniworld-staff': getKey() });
-  const count = (k) => list.filter(GROUPS[k]).length;
+  // Test bookings (made with the booking partner's sandbox) are hidden unless the team asks to see them.
+  const isTest = (r) => r.instant?.sandbox === true;
+  const visible = () => (showTests ? list : list.filter((r) => !isTest(r)));
+  const count = (k) => visible().filter(GROUPS[k]).length;
+  const testOn = () => { try { return localStorage.getItem('uniworld:testmode') === '1'; } catch { return false; } };
 
   function loginView(message = '', setup = false) {
     document.title = 'Team inbox — Uniworld';
@@ -492,18 +518,20 @@ export function mountStaff(main) {
         <label><span>Default “How to pay” details <small>pre-filled when you ask a customer to pay</small></span><textarea class="field-input" name="paymentNote" rows="3" maxlength="600" placeholder="Bank name · Account title · IBAN · Reference: your booking number">${e(settings.paymentNote)}</textarea></label>
         <div class="staff-form-actions"><button class="dark-button compact" type="submit">Save settings</button><span class="staff-saved" role="status"></span></div>
       </form>
+      <div class="staff-testmode"><div><b>Test mode on this phone: ${testOn() ? 'on' : 'off'}</b><small>While the booking partner is in test (sandbox) mode, its Book now fares and hotels are hidden from customers. Turn test mode on to try them on this phone with the test card 4242 4242 4242 4242.</small></div><button type="button" class="outline-button compact" data-staff="testmode">${testOn() ? 'Turn off' : 'Turn on'}</button></div>
     </details>`;
   }
 
   function inboxView() {
-    const shown = list.filter(GROUPS[filter]);
-    const fresh = count('new');
+    const shown = visible().filter(GROUPS[filter]);
+    const fresh = count('new'), tests = list.filter(isTest).length;
     document.title = `${fresh ? `(${fresh}) ` : ''}Team inbox — Uniworld`;
     main.innerHTML = `<section class="wrap staff-page">
       <div class="staff-head"><div><span class="eyebrow">UNIWORLD TEAM</span><h1>Requests</h1><p>${count('new')} new · ${count('in_progress')} in progress · ${count('due')} payment due · updated ${new Date(checkedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p></div>
         <div class="staff-tools">${alertsState('staff') === 'on' ? `<button class="outline-button compact" data-staff="alerts">${ic('check')} Alerts on</button>` : alertsState('staff') === 'unsupported' ? '' : `<button class="dark-button compact" data-staff="alerts">${ic('phone')} Turn on alerts</button>`}<button class="outline-button compact" data-staff="refresh">Refresh</button><button class="text-button" data-staff="signout">Sign out</button></div></div>
       ${settingsView()}
       <div class="chip-row staff-filters">${FILTERS.map(([k, l]) => `<button class="chip ${filter === k ? 'active' : ''}" data-staff="filter" data-filter="${k}" aria-pressed="${filter === k}">${l} (${count(k)})</button>`).join('')}</div>
+      ${tests ? `<p class="staff-tests"><button class="text-button" data-staff="tests">${showTests ? 'Hide' : 'Show'} ${tests} test booking${tests > 1 ? 's' : ''}</button></p>` : ''}
       <div class="staff-list">${shown.length ? shown.map(card).join('') : `<div class="no-results">${ic('compass')}<h3>Nothing here yet.</h3><p>New booking requests from the app show up here.</p></div>`}</div>
     </section>`;
   }
@@ -578,6 +606,8 @@ export function mountStaff(main) {
     if (b.dataset.staff === 'alerts') staffAlerts(b);
     else if (b.dataset.staff === 'refresh') load();
     else if (b.dataset.staff === 'filter') { filter = b.dataset.filter; inboxView(); }
+    else if (b.dataset.staff === 'tests') { showTests = !showTests; inboxView(); }
+    else if (b.dataset.staff === 'testmode') { try { if (testOn()) localStorage.removeItem('uniworld:testmode'); else localStorage.setItem('uniworld:testmode', '1'); } catch { /* storage blocked */ } location.reload(); }
     else if (b.dataset.staff === 'signout') { setKey(''); setSeen(Date.now()); list = []; loginView('Signed out.'); }
   }
 

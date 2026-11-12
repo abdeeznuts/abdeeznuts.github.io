@@ -260,7 +260,7 @@ function missingCard(kind, data, error) {
   return `<article class="live-card live-missing ${flight ? 'live-flight' : ''}">
     <span class="live-kicker">${ic(flight ? 'plane' : 'bed')} ${flight ? 'CHEAPEST FLIGHT' : 'CHEAPEST HOTEL'}</span>
     <h3>${title}</h3><p>${esc(text)}</p>
-    <div class="live-actions">${!data || data.notice === 'unavailable' || data.notice === 'partial' ? `<button type="button" class="live-cta" data-action="live-retry">${ic('refresh')} Try again</button>` : ''}${link ? `<a class="live-link" href="${esc(link)}" target="_blank" rel="noopener">See on ${flight ? 'Google Flights' : 'Google Hotels'} ${ic('arrowUpRight')}</a>` : ''}</div>
+    <div class="live-actions">${!data || data.notice === 'unavailable' || data.notice === 'partial' ? `<button type="button" class="live-cta" data-action="live-retry">${ic('refresh')} Try again</button>` : ''}${link ? `<a class="live-link" href="${esc(link)}" target="_blank" rel="noopener">See on ${flight ? 'Google Flights' : 'Google Hotels'} ${ic('arrowUpRight')}</a>` : ''}${empty ? '' : `<button type="button" class="live-link" data-action="advisor">Ask an advisor ${ic('arrowUpRight')}</button>`}</div>
   </article>`;
 }
 

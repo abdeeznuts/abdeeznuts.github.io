@@ -178,3 +178,39 @@
 .staff-alert.bad{background:#fff1ea;color:#a4461d}
 @media(max-width:520px){.ib-rooms li{grid-template-columns:minmax(0,1fr)}.ib-price{grid-template-columns:auto auto;justify-content:space-between;align-items:center;justify-items:start}}
 #modalTitle:focus{outline:none}
+
+/* v20: UniWorld's November Umrah offer */
+.offer-section{margin-top:26px;margin-bottom:8px;padding:26px 22px 20px;border-radius:var(--radius);background:linear-gradient(160deg,#173f42 0%,#204e45 100%);color:#fff;box-shadow:var(--shadow)}
+.offer-head .offer-eyebrow{display:inline-flex;align-items:center;gap:7px;color:#f1c9a6;margin-bottom:12px}
+.offer-head .offer-eyebrow .icon{width:13px;height:13px}
+.offer-head h2{font-size:clamp(27px,7vw,40px);line-height:1.08;font-weight:650;letter-spacing:-.6px;margin:0 0 10px}
+.offer-head h2 .serif{color:#f5dcc2}
+.offer-head p{color:#ffffffcc;font-size:14px;line-height:1.55;margin:0 0 18px;max-width:560px}
+.offer-tiers{display:grid;gap:12px}
+@media(min-width:760px){.offer-tiers{grid-template-columns:repeat(3,1fr)}}
+.offer-tier{background:#ffffff12;border:1px solid #ffffff26;border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.offer-tier-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.offer-stars{font-size:12px;font-weight:700;letter-spacing:.4px;color:#f5dcc2}
+.offer-tier strong{font-size:22px;font-weight:700}
+.offer-tier p{margin:0;font-size:13px;line-height:1.5;color:#ffffffd9;flex:1}
+.offer-actions{display:flex;gap:8px;flex-wrap:wrap}
+.offer-actions .dark-button{background:#f8f7f3;color:var(--ink)}
+.offer-actions .outline-button{border-color:#ffffff55;color:#fff}
+.offer-actions .icon{width:15px;height:15px}
+.offer-note{color:#ffffffa8;margin:14px 0 0}
+
+/* v20: UniWorld's services */
+.services-grid{display:grid;gap:14px}
+@media(min-width:760px){.services-grid{grid-template-columns:repeat(2,1fr)}}
+.service-card{display:grid;grid-template-columns:auto 1fr;gap:14px 16px;align-items:start;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+.service-icon{display:grid;place-items:center;width:48px;height:48px;border-radius:14px;background:#e8efe9;color:var(--green)}
+.service-icon .icon{width:22px;height:22px}
+.service-copy .eyebrow{color:#718178;margin-bottom:6px}
+.service-copy h3{margin:0 0 6px;font-size:18px;font-weight:650}
+.service-copy p{margin:0;color:var(--ink-soft);font-size:14px;line-height:1.55}
+.service-actions{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+/* v20: team inbox test switches */
+.staff-testmode{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.staff-testmode small{display:block;color:var(--ink-soft);font-size:12px;line-height:1.5;margin-top:4px;max-width:520px}
+.staff-tests{margin:4px 0 10px}
