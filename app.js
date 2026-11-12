@@ -2,6 +2,7 @@ import {showBrandIntro} from './launch.js';
 import {isInstalledIPhone,stopPhoneAI} from './phone-ai.js';
 import {mountVoicePlanner} from './voice-planner.js';
 import {initLiveRates,liveRatesSection,mountLiveRates,liveFlightBanner,openLiveSearch,money as liveMoney} from './live-rates.js';
+import {isNative} from './native.js';
 import {initRequests,openRequest,requestCards,mountStaff,CONTACT,COMPANY,applyContactLinks,openFindBooking,setContact,alertsButton,showRequest,mergeRequest} from './requests.js';
 import {initInstant,finishInstant} from './instant.js';
 import {initInstantFlights,finishFlight,finishNFlight} from './instant-flights.js';
@@ -259,7 +260,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-acti
 });
 window.addEventListener('online',()=>{refreshAccount();toast('You’re connected again.')});
 window.addEventListener('offline',()=>{state.connected=false;toast('Offline: booking requests and live prices need a connection.')});
-if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+if('serviceWorker' in navigator&&!isNative)navigator.serviceWorker.register('/sw.js').catch(()=>{});
 modal.addEventListener('close',()=>{plannerRequest++;stopPhoneAI()});
 initLiveRates({getCurrency:()=>state.currency,openModal,getDates:()=>({depart:state.start,return:state.end}),onBook:openRequest,onAllFlights:showAllFlights,onAllHotels:showAllHotels});
 initListings({openModal,openRequest,esc,icon,state,toast,goStays:place=>goSearch(place),openAdvisor:advisor,onSavedHotels:setSavedHotels,onFlightSearch:s=>{flightSearch=s;const r=$('#flightReturn'),n=$('#flightNearby');if(r)r.value=s.end||'';if(n)n.checked=!!s.nearby}});
