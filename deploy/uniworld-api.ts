@@ -10,7 +10,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 // Websites allowed to use this API. Extra ones (for example a new host for the app) can be
 // added without code changes in the UNIWORLD_ALLOWED_ORIGINS secret, separated by commas.
 const ORIGINS = new Set([
-  'https://abdeeznuts.github.io', 'https://app.uniworldinc.com', 'https://uniworldinc.com', 'https://www.uniworldinc.com',
+  'https://abdeeznuts.github.io',
   'http://127.0.0.1:5173', 'http://localhost:5173',
   ...(Deno.env.get('UNIWORLD_ALLOWED_ORIGINS') ?? '').split(',').map((s) => s.trim().replace(/\/+$/, '')).filter((s) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(s)),
 ]);
@@ -19,10 +19,14 @@ const APP_URL = Deno.env.get('UNIWORLD_APP_URL') || 'https://abdeeznuts.github.i
 const CATALOGUE = {"stays": [{"id": "caldera-house", "name": "Caldera House", "destination": "Santorini", "image": "/assets/santorini.webp", "price": 310, "room": "Caldera-view suite"}, {"id": "forest-observatory", "name": "The Forest Observatory", "destination": "Rosenberg", "image": "/assets/treehouse.webp", "price": 175, "room": "Canopy suite"}, {"id": "makkah-residence", "name": "Makkah Serenity Residence", "destination": "Makkah", "image": "/assets/makkah.webp", "price": 145, "room": "Family comfort room"}, {"id": "madinah-garden", "name": "Madinah Garden Suites", "destination": "Madinah", "image": "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1200&q=85", "price": 130, "room": "Comfort suite"}, {"id": "lagoon-house", "name": "The Lagoon House", "destination": "Maldives", "image": "/assets/maldives.webp", "price": 285, "room": "Ocean-view villa"}, {"id": "bali-retreat", "name": "Ubud Garden Retreat", "destination": "Bali", "image": "https://images.unsplash.com/photo-1540541338287-41700207dee6?auto=format&fit=crop&w=1200&q=85", "price": 125, "room": "Garden-view suite"}, {"id": "hunza-lodge", "name": "Karakoram Mountain Lodge", "destination": "Hunza", "image": "assets/hunza.webp", "price": 95, "room": "Valley-view room"}, {"id": "dubai-palm", "name": "Palm & Sea Dubai", "destination": "Dubai", "image": "https://images.unsplash.com/photo-1571896349842-33c89424de2d?auto=format&fit=crop&w=1200&q=85", "price": 195, "room": "Deluxe sea-view room"}, {"id": "istanbul-house", "name": "The Bosphorus House", "destination": "Istanbul", "image": "https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?auto=format&fit=crop&w=1200&q=85", "price": 110, "room": "Heritage double room"}, {"id": "london-townhouse", "name": "The London Townhouse", "destination": "London", "image": "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=1200&q=85", "price": 220, "room": "Classic king room"}, {"id": "nyc-loft", "name": "The Manhattan Loft", "destination": "New York", "image": "https://images.unsplash.com/photo-1485871981521-5b1fd3805eee?auto=format&fit=crop&w=1200&q=85", "price": 245, "room": "City-view king room"}, {"id": "bali-hideaway", "name": "Seminyak Beach Hideaway", "destination": "Bali", "image": "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1200&q=85", "price": 165, "room": "Poolside suite"}], "packages": [{"id": "umrah-essentials", "name": "The meaningful escape", "destination": "Makkah", "image": "/assets/makkah.webp", "price": 890, "days": 7}, {"id": "umrah-family", "name": "Together, with purpose", "destination": "Makkah", "image": "https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=1200&q=85", "price": 1290, "days": 10}, {"id": "umrah-signature", "name": "The signature journey", "destination": "Makkah", "image": "https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=1200&q=85", "price": 1890, "days": 14}, {"id": "northern-notes", "name": "Northern notes", "destination": "Hunza", "image": "assets/hunza.webp", "price": 680, "days": 7}, {"id": "island-time", "name": "A little island time", "destination": "Maldives", "image": "/assets/maldives.webp", "price": 1490, "days": 5}, {"id": "istanbul-story", "name": "The Istanbul story", "destination": "Istanbul", "image": "https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?auto=format&fit=crop&w=1200&q=85", "price": 990, "days": 6}]};
 const stays: any[] = CATALOGUE.stays;
 const packages: any[] = CATALOGUE.packages;
-const experiences: Record<string, [string, string, number, string]> = {
-  'hunza-walk': ['Hunza heritage walk', 'Hunza', 35, 'assets/hunza.webp'],
-  'london-walk': ['London riverside discovery', 'London', 65, 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?auto=format&fit=crop&w=1200&q=85'],
-  'nyc-walk': ['New York neighborhood stories', 'New York', 75, 'https://images.unsplash.com/photo-1485871981521-5b1fd3805eee?auto=format&fit=crop&w=1200&q=85'],
+// UniWorld's own services (uniworld.pk, uniworldtravelandtours.com). No set prices: an advisor quotes.
+const PLANE = 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=1200&q=85';
+const experiences: Record<string, [string, string, null, string]> = {
+  'ziyarat': ['Ziyarat in Makkah and Madinah', 'Makkah & Madinah', null, '/assets/makkah.webp'],
+  'saudi-transport': ['Transport in Saudi Arabia', 'Saudi Arabia', null, '/assets/makkah.webp'],
+  'umrah-visa': ['Umrah visa', 'Saudi Arabia', null, '/assets/makkah.webp'],
+  'visa': ['Visas for other countries', 'Worldwide', null, PLANE],
+  'insurance': ['Travel insurance', 'Worldwide', null, PLANE],
 };
 
 const STATUSES = ['new', 'in_progress', 'confirmed', 'cancelled'];
@@ -180,15 +184,13 @@ function tripFor(input: any) {
     if (!item) throw new HttpError('That journey is no longer available.');
     title = item.name; destination = item.destination; image = item.image;
     end = new Date(Date.parse(start) + (item.days - 1) * 86400000).toISOString().slice(0, 10);
-    details = `${item.days}-day journey · flights quoted separately`;
-    estimateUsd = amount(item.price * travelers);
+    details = `${item.days}-day journey · your advisor prices the whole trip`;
     Object.assign(extra, { productId: item.id, days: item.days });
   } else if (kind === 'experience') {
     const item = experiences[input.productId];
-    if (!item) throw new HttpError('That experience is no longer available.');
+    if (!item) throw new HttpError('That service is no longer available.');
     [title, destination] = item; image = item[3]; end = start;
-    details = '3-hour private experience';
-    estimateUsd = amount(item[2] * travelers);
+    details = 'Service request · your advisor quotes';
     Object.assign(extra, { productId: input.productId });
   } else if (kind === 'flight') {
     const from = safe(input.from, 80), to = safe(input.to, 80);
@@ -708,7 +710,7 @@ async function vapidKeys(records: () => any) {
 async function vapidHeader(endpoint: string, keys: any) {
   const key = await crypto.subtle.importKey('jwk', keys.privateJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const part = (o: unknown) => b64u(te.encode(JSON.stringify(o)));
-  const unsigned = `${part({ typ: 'JWT', alg: 'ES256' })}.${part({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'mailto:contact@uniworldinc.com' })}`;
+  const unsigned = `${part({ typ: 'JWT', alg: 'ES256' })}.${part({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'mailto:info@uniworld.pk' })}`;
   const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(unsigned)));
   return `vapid t=${unsigned}.${b64u(sig)}, k=${keys.publicKey}`;
 }
@@ -794,8 +796,9 @@ async function requireStaff(req: Request) {
 // Optional email alert for each new request, and when a customer says they paid
 // (only when RESEND_API_KEY is set).
 async function notifyTeam(r: any, event: 'new' | 'paid' = 'new') {
-  const key = Deno.env.get('RESEND_API_KEY');
-  if (!key) return;
+  // Email alerts go only to the address the team sets (UNIWORLD_NOTIFY_EMAIL), never to a built-in default.
+  const key = Deno.env.get('RESEND_API_KEY'), notifyTo = (Deno.env.get('UNIWORLD_NOTIFY_EMAIL') ?? '').trim();
+  if (!key || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notifyTo)) return;
   const lines = event === 'paid'
     ? [`${r.name} says they paid for ${r.id}.`, '', `Amount due: ${r.payment?.currency} ${r.payment?.amount}`, r.payment?.customerSent?.note ? `Their note: ${r.payment.customerSent.note}` : 'No note added.', 'Check the payment, then mark it paid in the team inbox.', '']
     : [`New request ${r.id}`, ''];
@@ -812,8 +815,8 @@ async function notifyTeam(r: any, event: 'new' | 'paid' = 'new') {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: Deno.env.get('UNIWORLD_NOTIFY_FROM') || 'Uniworld App <onboarding@resend.dev>',
-        to: [Deno.env.get('UNIWORLD_NOTIFY_EMAIL') || 'contact@uniworldinc.com'],
+        from: Deno.env.get('UNIWORLD_NOTIFY_FROM') || 'UniWorld App <onboarding@resend.dev>',
+        to: [notifyTo],
         subject: event === 'paid' ? `Payment sent for ${r.id}: ${r.title}` : `New Uniworld request ${r.id}: ${r.title}`,
         text: lines.join('\n'),
       }),
@@ -835,7 +838,7 @@ async function body(req: Request) {
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-11-06.2';
+const BUILD = '2026-11-12.1';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
@@ -946,7 +949,7 @@ Deno.serve(async (req) => {
         favorites: (rows.find((r: any) => r.kind === 'favorites') as any)?.body ?? [],
         savedHotels: (rows.find((r: any) => r.kind === 'saved-hotels') as any)?.body ?? [],
         contact: { whatsapp: (await readSettings(records)).whatsapp },
-        instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: !!Deno.env.get('LITEAPI_KEY') || flightModes().on, flightProvider: Deno.env.get('LITEAPI_KEY') ? 'nuitee' : flightModes().on ? 'duffel' : null },
+        instant: { hotels: !!Deno.env.get('LITEAPI_KEY'), flights: !!Deno.env.get('LITEAPI_KEY') || flightModes().on, flightProvider: Deno.env.get('LITEAPI_KEY') ? 'nuitee' : flightModes().on ? 'duffel' : null, sandbox: Deno.env.get('LITEAPI_KEY') ? nuiteeSandbox() : flightModes().on ? flightModes().sandbox : false },
         aiMode: 'on-device',
         displayName: 'This device',
       }, 200, origin);

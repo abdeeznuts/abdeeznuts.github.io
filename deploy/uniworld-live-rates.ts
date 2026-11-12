@@ -13,7 +13,6 @@ const SERPAPI = 'https://serpapi.com/search.json';
 // added without code changes in the UNIWORLD_ALLOWED_ORIGINS secret, separated by commas.
 const ALLOWED_ORIGINS = new Set([
   'https://abdeeznuts.github.io',
-  'https://app.uniworldinc.com', 'https://uniworldinc.com', 'https://www.uniworldinc.com',
   'http://127.0.0.1:5173',
   'http://localhost:5173',
   ...(Deno.env.get('UNIWORLD_ALLOWED_ORIGINS') ?? '').split(',').map((s) => s.trim().replace(/\/+$/, '')).filter((s) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(s)),
@@ -924,7 +923,7 @@ async function listingReply(kind: string, input: Record<string, unknown>, db: an
 }
 
 // Lets a deploy be checked against the source it came from.
-const BUILD = '2026-11-06.2';
+const BUILD = '2026-11-12.1';
 async function sourceHash() {
   try {
     const h = new Uint8Array(await crypto.subtle.digest('SHA-256', await Deno.readFile(new URL(import.meta.url))));
